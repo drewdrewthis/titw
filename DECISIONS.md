@@ -1,0 +1,138 @@
+# TITW Decisions
+
+Small design calls left open by `docs/HANDOFF.md`, resolved here so implementation can
+proceed. All are reversible pre-1.0; override by editing this file and the code together.
+
+## D1 — Export field is named `exports`
+
+`exports` (not `files`) in `titw.package.yaml`. It names the publisher-controlled surface
+consumers may select from — the same semantic as npm/Node `exports` — while `files` would
+collide with the npm meaning "what goes in the tarball" (TITW's equivalent is the
+publication filter, not the export list).
+
+## D2 — `version` is mandatory in the manifest; tag consistency is checked
+
+The manifest carries the version; when a Git tag is present it must agree (`titw check`
+fails on mismatch). Deriving from the tag alone would make a bare checkout (path: source,
+un-tagged branch) versionless and make `check` depend on Git state.
+
+## D3 — Target mappings live in the manifest under `targets:`
+
+Explicit mapping beats inference from component types. Inference can be layered on later
+as a default when `targets:` is absent; the manifest key stays authoritative.
+
+## D4 — Active-component approval is hash-bound, via an explicit command
+
+`titw enable <package>:<component-id>` records the component's content hash in `titw.yaml`.
+On sync, a hash mismatch deactivates the component and reports conspicuously; re-approval
+is the same `enable` command. No interactive prompt machinery in v1 — the command IS the
+approval act. (Deferred past the v1 slice; the slice ships passive knowledge only.)
+
+## D5 — Claude corpus projection uses the seven-store layout with compat frontmatter
+
+Measured 2026-08-08 against the installed `procedures` plugin (v0.2.3):
+`query-records.sh` resolves its root as `${QUERY_RECORDS_ROOT:-${CODEX_ROOT:-~/.claude}}`
+and greps `kind:`/`keywords:` frontmatter across exactly these stores:
+
+```
+references/failure-modes  references/decisions  references/solutions
+references/procedures     references/research   references/principles  plans
+```
+
+Therefore the v1 Claude target projects knowledge into that layout and preserves
+`kind`/`keywords` keys. OKF-native records (`type`/`tags`) get compat keys emitted into
+the projection copy (`kind`, `keywords`) — projection is generated output, so this does
+not violate "copied unchanged" for the package store, only decorates the target view.
+Revisit when the plugin learns OKF keys natively.
+
+Correction (2026-08-08, spike): compat keys are INSERTED into the projected copy's
+frontmatter (derived from `type`/`tags`/`titw.id`), not merely preserved — the awk matcher
+tokenizes `keywords: [a, b]` inline-list syntax only.
+
+## D6 — Toolchain
+
+Node ≥20, strict TypeScript (NodeNext ESM), `vitest`, `commander`, `zod` (schema
+validation), `yaml`, `picomatch` (selectors), `semver`. Git operations shell out to the
+system `git` — no libgit2 binding; that keeps private-repo auth on the user's existing
+credential helpers, per the handoff.
+
+## D7 — Data root
+
+`$TITW_HOME`, defaulting to `$XDG_DATA_HOME/titw` or `~/.local/share/titw`, laid out as
+in handoff §13. Every command takes the root from the environment so tests run hermetic.
+
+## D8 — v1 slice repo layout
+
+Single package, `src/` layered as `core/` (manifest, sources, cache, lock, selection),
+`materialize/` (staging, generations, receipts, activation), `targets/claude/`, `cli.ts`.
+No monorepo until a second distributable exists.
+
+---
+
+Resolved while building the v1 slice (2026-08-08). Same standing as D1–D8.
+
+## D9 — `titw.lock` is JSON; the two authored manifests stay YAML
+
+`titw.package.yaml` and `titw.yaml` are hand-edited, so YAML earns its cost. `titw.lock` is
+generated and diffed, never authored; JSON removes every quoting question (npm's split).
+
+## D10 — Source forms also accept `git+file://` and a bare `owner/repo` slug
+
+`git+file://<abs path>` completes the `git+<scheme>://` family and is what makes the fetch
+path — clone, tag listing, semver resolution, commit pinning — testable with no network.
+Bare `owner/repo` is github sugar, as handoff §12 already writes it
+(`titw install vercel-labs/agent-skills`); it normalizes to `github:owner/repo`.
+
+## D11 — Omitting `--version` records `^<resolved version>`
+
+Resolution uses `*` (newest release), but the range written to `titw.yaml`/`titw.lock` is
+`^<resolved>`. Recording `*` would make `outdated`'s "wanted" column meaningless and every
+package permanently up to date.
+
+## D12 — A directory selector implies its subtree
+
+`knowledge` selects exactly what `knowledge/**` selects. Consumers should not have to
+remember `/**`, and no other reading of a directory-shaped selector is useful.
+
+## D13 — Compat frontmatter also carries `id`, derived from `titw.id` (extends D5)
+
+Measured by the spike: the plugin's `record-scan.awk` matches `^id:` at frontmatter top
+level, so an OKF record whose identity lives at `titw.id` is invisible to `--id` and
+`--links-to` without it. The projected copy therefore gets `id`, `kind`, and `keywords`.
+Only records are decorated — a document with no projectable kind is copied verbatim.
+
+## D14 — Selected non-record files project under `<target>/files/<package>/<path>`
+
+The corpus holds records. Scripts, assets, and un-frontmattered Markdown still land in the
+projection so that "everything selected is materialized" stays literally true and every byte
+is receipted. Active components (D4) will supersede this for skills and hooks.
+
+## D15 — `targets/<id>/{active,previous}` is `$TITW_HOME`-global, per handoff §13
+
+Not per-environment. This is a genuine collision the moment a second environment syncs the
+same target; the slice ships one environment (`default`) and the receipt records which
+environment produced the projection. Revisit before multi-environment support.
+
+## D16 — Generated projection files are read-only too
+
+Handoff invariant 10 only demands it of installed packages, but the projection is derived
+state that the next sync replaces wholesale (§17: an installed package is never edited in
+place). `0444` makes that visible at the moment of the mistake rather than at the next sync.
+
+A side effect worth keeping: a packaged script projects without its execute bit, so a
+selected executable is present but not runnable until activation (D4) grants it — which is
+exactly the passive/active boundary of handoff §16.
+
+## D17 — `sync` recomputes selection from `titw.yaml` and relocks it
+
+`titw.yaml` is authoritative for *what* is selected; `titw.lock` is authoritative for *which
+bytes* those selectors resolve against. So sync re-runs the §10 algorithm, verifies the
+installed tree against the locked tree hash, and rewrites only the lock's `selection` and
+file inventory — never its version, commit, or refs. Editing selection then syncing works;
+changing versions still requires an explicit `install`.
+
+## D18 — Receipts come in a `current`/`previous` pair mirroring the directory pair
+
+`receipts/<target>/{current,previous}.json` swap exactly when `active`/`previous` swap, plus
+one `<generation>.json` per sync for history. Rollback then restores a receipt that was
+actually written for that tree instead of re-deriving one from the tree it just demoted.

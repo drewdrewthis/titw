@@ -1,0 +1,39 @@
+{
+  "name": "titw",
+  "version": "0.1.0",
+  "description": "TITW — a GitHub-backed package manager for agent knowledge and behavior files",
+  "license": "MIT",
+  "repository": "github:drewdrewthis/titw",
+  "type": "module",
+  "bin": {
+    "titw": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "picomatch": "^4.0.2",
+    "semver": "^7.6.3",
+    "yaml": "^2.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "@types/picomatch": "^3.0.1",
+    "@types/semver": "^7.5.8",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.2",
+    "vitest": "^2.1.1"
+  }
+}

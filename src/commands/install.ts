@@ -1,0 +1,138 @@
+import path from 'node:path';
+import { TitwError } from '../core/errors.js';
+import { fetchPackage } from '../core/fetch.js';
+import { READ_ONLY_FILE_MODE, copyTree, rmTreeForce } from '../core/fsx.js';
+import { hashFile } from '../core/hash.js';
+import type { EnvironmentManifest, Lock, LockEntry, PackageSelection } from '../core/manifest.js';
+import { selectFiles, validateSelectors } from '../core/select.js';
+import { parseSource } from '../core/source.js';
+import { installedPackageDir } from '../materialize/layout.js';
+import { contextFor, readEnvironment, writeEnvironment, type CommandOptions } from './context.js';
+
+export interface InstallOptions extends CommandOptions {
+  readonly source: string;
+  /** Semver range; when omitted the newest release is used and `^<version>` is recorded. */
+  readonly version?: string | undefined;
+  readonly include?: readonly string[] | undefined;
+  readonly exclude?: readonly string[] | undefined;
+  readonly dryRun?: boolean | undefined;
+}
+
+export interface InstallResult {
+  readonly package: string;
+  readonly version: string;
+  readonly commit: string | null;
+  readonly source: string;
+  readonly range: string;
+  readonly exported: string[];
+  readonly selected: string[];
+  readonly installedDir: string;
+  readonly dryRun: boolean;
+  readonly warnings: string[];
+}
+
+/**
+ * Fetch, lock, and record a package in an environment.
+ *
+ * The whole package is fetched and copied read-only even when one file is
+ * selected (handoff invariant 3 + 10); nothing is projected until `sync`.
+ */
+export async function install(options: InstallOptions): Promise<InstallResult> {
+  const context = contextFor(options);
+  validateSelectors(options.include, 'include');
+  validateSelectors(options.exclude, 'exclude');
+
+  const source = parseSource(options.source, { baseDir: context.cwd });
+  const range = options.version ?? '*';
+  const fetched = await fetchPackage({ source, range, cacheDir: context.layout.cacheDir });
+
+  const selection = selectFiles({
+    files: fetched.files,
+    exports: fetched.manifest.exports,
+    include: options.include,
+    exclude: options.exclude,
+  });
+
+  if (selection.selected.length === 0) {
+    throw new TitwError(
+      'E_SELECTION_EMPTY',
+      `nothing selected from ${fetched.manifest.name}@${fetched.version}`,
+      [`the package exports ${selection.exported.length} file(s); check --include/--exclude`],
+    );
+  }
+
+  const warnings = [
+    ...selection.unmatchedInclude.map((p) => `--include "${p}" matched no exported file`),
+    ...selection.unmatchedExclude.map((p) => `--exclude "${p}" subtracted nothing`),
+  ];
+
+  const installedDir = installedPackageDir(
+    context.layout,
+    fetched.manifest.name,
+    fetched.version,
+  );
+
+  const result: InstallResult = {
+    package: fetched.manifest.name,
+    version: fetched.version,
+    commit: fetched.commit,
+    source: source.canonical,
+    range: options.version ?? `^${fetched.version}`,
+    exported: selection.exported,
+    selected: selection.selected,
+    installedDir,
+    dryRun: options.dryRun === true,
+    warnings,
+  };
+  if (result.dryRun) return result;
+
+  await rmTreeForce(installedDir);
+  await copyTree(fetched.dir, installedDir, READ_ONLY_FILE_MODE);
+
+  const { manifest, lock } = await readEnvironment(context);
+  const selectionEntry: PackageSelection = {
+    source: source.canonical,
+    version: result.range,
+    ...(options.include === undefined ? {} : { include: [...options.include] }),
+    ...(options.exclude === undefined ? {} : { exclude: [...options.exclude] }),
+  };
+
+  const nextManifest: EnvironmentManifest = {
+    ...manifest,
+    packages: { ...manifest.packages, [result.package]: selectionEntry },
+    targets: Object.keys(manifest.targets).length === 0
+      ? { claude: { enabled: true } }
+      : manifest.targets,
+  };
+
+  const entry: LockEntry = {
+    source: source.canonical,
+    cloneUrl: source.cloneUrl,
+    range: result.range,
+    version: fetched.version,
+    commit: fetched.commit,
+    ref: fetched.ref,
+    manifestHash: fetched.manifestHash,
+    treeHash: fetched.treeHash,
+    selection: selection.selected,
+    files: await inventory(installedDir, selection.selected),
+  };
+  const nextLock: Lock = {
+    ...lock,
+    packages: { ...lock.packages, [result.package]: entry },
+  };
+
+  await writeEnvironment(context, nextManifest, nextLock);
+  return result;
+}
+
+/** Hash inventory of the selected files, keyed by package-relative path. */
+export async function inventory(
+  root: string,
+  files: readonly string[],
+): Promise<Record<string, string>> {
+  const entries = await Promise.all(
+    files.map(async (file) => [file, await hashFile(path.join(root, ...file.split('/')))] as const),
+  );
+  return Object.fromEntries(entries);
+}
