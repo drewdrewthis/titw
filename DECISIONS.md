@@ -136,3 +136,40 @@ changing versions still requires an explicit `install`.
 `receipts/<target>/{current,previous}.json` swap exactly when `active`/`previous` swap, plus
 one `<generation>.json` per sync for history. Rollback then restores a receipt that was
 actually written for that tree instead of re-deriving one from the tree it just demoted.
+
+---
+
+Resolved in the 2026-08-09 design review conversation. Same standing as D1–D8.
+
+## D19 — A release is the declared version on the default branch; git tags are not the mechanism
+
+Version validity and verification are v2 (issue #3). Trust is accepted the way the Claude
+plugin marketplace accepts it: the manifest's `version:` at the fetched commit IS the
+release. A new version must be strictly greater than the one it replaces — publish enforces
+the bump, consumers refuse downgrades against their lock. Accepted consequence: only the
+current version is installable from source; history lives in locks, caches, and generations,
+not in the repo's refs. The tag machinery in fetch (tag listing, semver-over-tags
+resolution, tag/manifest mismatch check) is superseded — the mismatch check moves to
+publish, where the bump happens.
+
+## D20 — `titw publish` is a conformity check plus a monotonic version bump
+
+`titw publish major|minor|patch`: refuse a dirty tree, verify frontmatter conformity of
+every exported record (the producer-side twin of the projection's checks — unique ids,
+inline keywords, no CRLF/BOM, no symlinks), bump `titw.package.yaml`, commit, push. No tag,
+no release object, no registry. Distribution is the push itself — anyone with the URL can
+install the moment it lands.
+
+## D21 — Repository trust is deferred to v2
+
+TOFU at first install; `titw.lock`'s commit + treeHash pin what was actually fetched.
+Signing, hash publication, namespaces, and mutation tripwires wait until packages come from
+people the consumer doesn't trust. Preserved as issue #3.
+
+## D22 — Materialized files keep their source modes; read-only stamping is dropped (amends D16, relaxes handoff invariant 10)
+
+The npm precedent: edit at your own risk. Drift detection is the real guard — receipts hash
+every file and `titw status` reports modified/unowned paths without deleting them; `0444`
+was a tripwire on top of that, and it broke packaged scripts by stripping the execute bit.
+Installed trees and projections now preserve each file's source mode. An edit to derived
+state is still clobbered by the next sync — reported as drift beforehand, not prevented.
