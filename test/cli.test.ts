@@ -79,6 +79,22 @@ describe('titw CLI', () => {
     expect(result.code).toBe(0);
   });
 
+  it('install --frozen --dry-run reports without writing state', async () => {
+    const result = await cli(['install', '--frozen', '--dry-run', '--json']);
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout) as { dryRun: boolean; packages: Array<{ name: string }> };
+    expect(payload.dryRun).toBe(true);
+    expect(payload.packages[0]?.name).toBe('@titw/fixture-way');
+  }, 30_000);
+
+  it('install --frozen rejects --version/--include/--exclude instead of ignoring them', async () => {
+    for (const flags of [['--version', '^1.0.0'], ['--include', 'knowledge/**'], ['--exclude', 'plans/**']]) {
+      const result = await cli(['install', '--frozen', ...flags]);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('not allowed');
+    }
+  });
+
   it('install --frozen with a source is refused; without, it reproduces the lock', async () => {
     const refused = await cli(['install', repo.source, '--frozen']);
     expect(refused.code).toBe(1);
