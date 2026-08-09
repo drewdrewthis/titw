@@ -224,11 +224,12 @@ async function git(dir: string, args: readonly string[]): Promise<void> {
 }
 
 /**
- * Build a local git repository holding the fixture package, tagged `v1.0.0`
- * and `v1.1.0`.
+ * Build a local git repository holding the fixture package at version 1.1.0,
+ * with a 1.0.0 commit behind it and deliberately NO git tags — D19: the
+ * manifest on the default branch is the release.
  *
- * Cloning it over `git+file://` exercises the real fetch path — clone, tag
- * listing, semver resolution, commit pinning — with no network.
+ * Cloning it over `git+file://` exercises the real fetch path — clone,
+ * default-branch resolution, commit pinning — with no network.
  */
 export async function buildFixtureRepo(dir: string): Promise<FixtureRepo> {
   await fs.mkdir(dir, { recursive: true });
@@ -237,14 +238,19 @@ export async function buildFixtureRepo(dir: string): Promise<FixtureRepo> {
   await writeFixturePackage(dir, '1.0.0');
   await git(dir, ['add', '-A']);
   await git(dir, ['commit', '--quiet', '-m', 'fixture 1.0.0']);
-  await git(dir, ['tag', 'v1.0.0']);
 
   await writeFixturePackage(dir, '1.1.0');
   await git(dir, ['add', '-A']);
   await git(dir, ['commit', '--quiet', '-m', 'fixture 1.1.0']);
-  await git(dir, ['tag', 'v1.1.0']);
 
   return { dir, source: `git+file://${dir}`, versions: ['1.0.0', '1.1.0'] };
+}
+
+/** Commit a version change to an existing fixture repo (e.g. to test downgrade refusal). */
+export async function publishFixtureVersion(repo: FixtureRepo, version: string): Promise<void> {
+  await writeFixturePackage(repo.dir, version);
+  await git(repo.dir, ['add', '-A']);
+  await git(repo.dir, ['commit', '--quiet', '-m', `fixture ${version}`]);
 }
 
 /** Recursively delete a tree that may hold read-only files. */

@@ -13,6 +13,7 @@ import type { Catalog } from '../src/targets/claude/index.js';
 import {
   FIXTURE_PACKAGE,
   buildFixtureRepo,
+  publishFixtureVersion,
   makeTmpDir,
   removeTree,
   type FixtureRepo,
@@ -61,11 +62,11 @@ describe('install -> sync -> Claude corpus projection', () => {
     await removeTree(root);
   });
 
-  it('resolves the range against the repository tags and locks the exact commit', async () => {
+  it('resolves the version from the default-branch manifest (no tags) and locks the exact commit', async () => {
     const lock = await loadLock(path.join(home, 'environments/default/titw.lock'));
     const entry = lock.packages[FIXTURE_PACKAGE];
     expect(entry?.version).toBe('1.1.0');
-    expect(entry?.ref).toBe('v1.1.0');
+    expect(entry?.ref).toBe('origin/main');
     expect(entry?.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(entry?.range).toBe('^1.0.0');
     expect(entry?.treeHash).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -175,7 +176,7 @@ describe('install -> sync -> Claude corpus projection', () => {
     expect(deploy?.sha256).toMatch(/^sha256:/);
   });
 
-  it('reports current, wanted, and latest from the repository tags', async () => {
+  it('reports current, wanted, and latest from the published manifest version', async () => {
     const report = await outdated({ home });
     expect(report.packages[0]).toMatchObject({
       current: '1.1.0',
@@ -250,17 +251,23 @@ describe('selection and dry runs', () => {
     await removeTree(root);
   });
 
+  it('refuses a range the published version does not satisfy (D19: only HEAD is installable)', async () => {
+    await expect(
+      install({ home, source: repo.source, version: '1.0.0' }),
+    ).rejects.toMatchObject({ code: 'E_VERSION_UNRESOLVED' });
+  }, 30_000);
+
   it('installs a single file and projects only that record', async () => {
     await install({
       home,
       source: repo.source,
-      version: '1.0.0',
+      version: '1.1.0',
       include: ['knowledge/principles/simple-first.md'],
     });
     const result = await sync({ home });
 
     const lock = await loadLock(path.join(home, 'environments/default/titw.lock'));
-    expect(lock.packages[FIXTURE_PACKAGE]?.version).toBe('1.0.0');
+    expect(lock.packages[FIXTURE_PACKAGE]?.version).toBe('1.1.0');
     expect(lock.packages[FIXTURE_PACKAGE]?.selection).toEqual([
       'knowledge/principles/simple-first.md',
     ]);
@@ -268,6 +275,14 @@ describe('selection and dry runs', () => {
       'catalog.json',
       `${PKG}/knowledge/principles/simple-first.md`,
     ]);
+  }, 30_000);
+
+  it('refuses a downgrade against the lock (D19: versions are monotonic)', async () => {
+    await publishFixtureVersion(repo, '0.9.0');
+    await expect(install({ home, source: repo.source })).rejects.toMatchObject({
+      code: 'E_VERSION_DOWNGRADE',
+    });
+    await publishFixtureVersion(repo, '1.1.0');
   }, 30_000);
 
   it('leaves no state behind on a dry-run install', async () => {
