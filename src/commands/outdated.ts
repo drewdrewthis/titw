@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { satisfies } from 'semver';
 import { comparePaths, pathExists } from '../core/fsx.js';
-import { ensureRepo, latestVersion, listVersions, pickVersion } from '../core/fetch.js';
+import { ensureRepo, publishedVersion, type Release } from '../core/fetch.js';
 import { PACKAGE_MANIFEST_FILENAME, loadPackageManifest } from '../core/manifest.js';
 import { parseSource } from '../core/source.js';
 import { contextFor, readEnvironment, type CommandOptions } from './context.js';
@@ -45,12 +45,13 @@ export async function outdated(options: CommandOptions = {}): Promise<OutdatedRe
 
     try {
       const source = parseSource(selection.source, { baseDir: context.cwd });
-      const versions =
+      // D19: a source publishes exactly one version — the manifest at HEAD.
+      const release =
         source.kind === 'path'
-          ? await pathVersions(source.dir)
-          : await listVersions(await ensureRepo(source, context.layout.cacheDir));
-      const wanted = pickVersion(versions, range)?.version ?? null;
-      const latest = latestVersion(versions)?.version ?? null;
+          ? await pathVersion(source.dir)
+          : await publishedVersion(await ensureRepo(source, context.layout.cacheDir));
+      const latest = release?.version ?? null;
+      const wanted = latest !== null && satisfies(latest, range) ? latest : null;
       rows.push({
         name,
         source: selection.source,
@@ -77,11 +78,11 @@ export async function outdated(options: CommandOptions = {}): Promise<OutdatedRe
   return { environment: context.env.name, packages: rows };
 }
 
-/** A `path:` source has exactly one "release": whatever its working tree declares. */
-async function pathVersions(dir: string | null): Promise<Array<{ version: string; ref: string }>> {
-  if (dir === null) return [];
+/** A `path:` source publishes whatever its working tree declares. */
+async function pathVersion(dir: string | null): Promise<Release | null> {
+  if (dir === null) return null;
   const manifestPath = path.join(dir, PACKAGE_MANIFEST_FILENAME);
-  if (!(await pathExists(manifestPath))) return [];
+  if (!(await pathExists(manifestPath))) return null;
   const manifest = await loadPackageManifest(manifestPath);
-  return [{ version: manifest.version, ref: '(working tree)' }];
+  return { version: manifest.version, ref: '(working tree)' };
 }

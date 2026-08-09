@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { maxSatisfying, rsort, satisfies, valid as validSemver } from 'semver';
+import { satisfies } from 'semver';
 import { TitwError } from './errors.js';
 import { ensureDir, pathExists, walkFiles } from './fsx.js';
 import { hashFile, hashTree } from './hash.js';
@@ -10,8 +10,8 @@ import type { PackageSource } from './source.js';
 
 const run = promisify(execFile);
 
-/** A release tag and the semver version it denotes. */
-export interface ReleaseTag {
+/** A published version and the ref it was read from. */
+export interface Release {
   readonly version: string;
   readonly ref: string;
 }
@@ -64,11 +64,32 @@ export async function ensureRepo(source: PackageSource, cacheDir: string): Promi
   await ensureDir(cacheDir);
   const repoDir = path.join(cacheDir, source.cacheKey);
   if (await pathExists(path.join(repoDir, '.git'))) {
-    await git(['fetch', '--tags', '--prune', '--force', '--quiet', 'origin'], repoDir);
+    await git(['fetch', '--prune', '--force', '--quiet', 'origin'], repoDir);
   } else {
     await git(['clone', '--quiet', '--', source.cloneUrl, repoDir]);
   }
+  // A warm cache may predate the remote renaming its default branch.
+  await git(['remote', 'set-head', 'origin', '--auto'], repoDir);
   return repoDir;
+}
+
+/** Ref of the remote default branch, e.g. `origin/main`. */
+async function defaultBranchRef(repoDir: string): Promise<string> {
+  return (await git(['rev-parse', '--abbrev-ref', 'origin/HEAD'], repoDir)).trim();
+}
+
+/**
+ * The single published version of a git source: the manifest's `version:` at
+ * the default-branch HEAD (D19 — git tags are not the release mechanism).
+ * `null` when the repo has no package manifest.
+ */
+export async function publishedVersion(repoDir: string): Promise<Release | null> {
+  const ref = await defaultBranchRef(repoDir);
+  await checkoutClean(repoDir, ref);
+  const manifestPath = path.join(repoDir, PACKAGE_MANIFEST_FILENAME);
+  if (!(await pathExists(manifestPath))) return null;
+  const manifest = await loadPackageManifest(manifestPath);
+  return { version: manifest.version, ref };
 }
 
 /**
@@ -81,50 +102,6 @@ export async function ensureRepo(source: PackageSource, cacheDir: string): Promi
 async function checkoutClean(repoDir: string, ref: string): Promise<void> {
   await git(['checkout', '--quiet', '--detach', '--force', ref], repoDir);
   await git(['clean', '-xdff', '--quiet'], repoDir);
-}
-
-/** List the release tags of a repository, newest version first. */
-export async function listVersions(repoDir: string): Promise<ReleaseTag[]> {
-  const stdout = await git(['tag', '--list'], repoDir);
-  const tags: ReleaseTag[] = [];
-  for (const line of stdout.split('\n')) {
-    const ref = line.trim();
-    if (ref === '') continue;
-    const version = versionFromTag(ref);
-    if (version !== null) tags.push({ version, ref });
-  }
-  return sortDescending(tags);
-}
-
-/** Read the semver version a tag denotes; `v1.2.3` and `1.2.3` both count. */
-export function versionFromTag(ref: string): string | null {
-  const candidate = ref.startsWith('v') ? ref.slice(1) : ref;
-  return validSemver(candidate);
-}
-
-/** Sort release tags newest-version-first. */
-export function sortDescending(tags: readonly ReleaseTag[]): ReleaseTag[] {
-  const order = rsort(tags.map((tag) => tag.version));
-  const byVersion = new Map(tags.map((tag) => [tag.version, tag]));
-  return order.flatMap((version) => {
-    const tag = byVersion.get(version);
-    return tag === undefined ? [] : [tag];
-  });
-}
-
-/** Newest tag satisfying `range`, or `null` when nothing does. */
-export function pickVersion(tags: readonly ReleaseTag[], range: string): ReleaseTag | null {
-  const best = maxSatisfying(
-    tags.map((tag) => tag.version),
-    range,
-  );
-  if (best === null) return null;
-  return tags.find((tag) => tag.version === best) ?? null;
-}
-
-/** Newest tag overall, ignoring any range. */
-export function latestVersion(tags: readonly ReleaseTag[]): ReleaseTag | null {
-  return sortDescending(tags)[0] ?? null;
 }
 
 /**
@@ -182,40 +159,24 @@ export async function fetchPackage(options: {
     return describe(source, repoDir, pinnedManifest, pinnedManifest.version, options.commit);
   }
 
-  const tags = await listVersions(repoDir);
-  if (tags.length === 0) {
-    throw new TitwError(
-      'E_VERSION_UNRESOLVED',
-      `${source.canonical} has no release tags`,
-      ['tag a release as "v1.2.3" or "1.2.3" before installing it'],
-    );
-  }
-  const picked = pickVersion(tags, range);
-  if (picked === null) {
-    throw new TitwError(
-      'E_VERSION_UNRESOLVED',
-      `${source.canonical} has no release satisfying ${range}`,
-      [`available: ${tags.map((tag) => tag.version).join(', ')}`],
-    );
-  }
-  await checkoutClean(repoDir, picked.ref);
-  const commit = (await git(['rev-parse', 'HEAD'], repoDir)).trim();
-
-  const manifestPath = path.join(repoDir, PACKAGE_MANIFEST_FILENAME);
-  if (!(await pathExists(manifestPath))) {
+  const release = await publishedVersion(repoDir);
+  if (release === null) {
     throw new TitwError(
       'E_NOT_FOUND',
-      `${source.canonical}@${picked.version} has no ${PACKAGE_MANIFEST_FILENAME}`,
+      `${source.canonical} has no ${PACKAGE_MANIFEST_FILENAME}`,
+      ['a titw package declares its version in the manifest on its default branch (D19)'],
     );
   }
-  const manifest = await loadPackageManifest(manifestPath);
-  if (manifest.version !== picked.version) {
+  if (range !== '*' && !satisfies(release.version, range)) {
     throw new TitwError(
-      'E_VERSION_MISMATCH',
-      `tag ${picked.ref} declares version ${picked.version} but the manifest says ${manifest.version}`,
+      'E_VERSION_UNRESOLVED',
+      `${source.canonical} is version ${release.version}, which does not satisfy ${range}`,
+      ['only the version published on the default branch is installable from source (D19)'],
     );
   }
-  return describe(source, repoDir, manifest, picked.version, commit, picked.ref);
+  const commit = (await git(['rev-parse', 'HEAD'], repoDir)).trim();
+  const manifest = await loadPackageManifest(path.join(repoDir, PACKAGE_MANIFEST_FILENAME));
+  return describe(source, repoDir, manifest, release.version, commit, release.ref);
 }
 
 async function describe(

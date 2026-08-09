@@ -6,6 +6,7 @@ import { install } from '../src/commands/install.js';
 import { outdated } from '../src/commands/outdated.js';
 import { status } from '../src/commands/status.js';
 import { rollback, sync } from '../src/commands/sync.js';
+import { update } from '../src/commands/update.js';
 import { hashFile } from '../src/core/hash.js';
 import { loadLock } from '../src/core/manifest.js';
 import { walkFiles } from '../src/core/fsx.js';
@@ -13,6 +14,7 @@ import type { Catalog } from '../src/targets/claude/index.js';
 import {
   FIXTURE_PACKAGE,
   buildFixtureRepo,
+  publishFixtureVersion,
   makeTmpDir,
   removeTree,
   type FixtureRepo,
@@ -61,11 +63,11 @@ describe('install -> sync -> Claude corpus projection', () => {
     await removeTree(root);
   });
 
-  it('resolves the range against the repository tags and locks the exact commit', async () => {
+  it('resolves the version from the default-branch manifest (no tags) and locks the exact commit', async () => {
     const lock = await loadLock(path.join(home, 'environments/default/titw.lock'));
     const entry = lock.packages[FIXTURE_PACKAGE];
     expect(entry?.version).toBe('1.1.0');
-    expect(entry?.ref).toBe('v1.1.0');
+    expect(entry?.ref).toBe('origin/main');
     expect(entry?.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(entry?.range).toBe('^1.0.0');
     expect(entry?.treeHash).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -175,7 +177,7 @@ describe('install -> sync -> Claude corpus projection', () => {
     expect(deploy?.sha256).toMatch(/^sha256:/);
   });
 
-  it('reports current, wanted, and latest from the repository tags', async () => {
+  it('reports current, wanted, and latest from the published manifest version', async () => {
     const report = await outdated({ home });
     expect(report.packages[0]).toMatchObject({
       current: '1.1.0',
@@ -250,17 +252,23 @@ describe('selection and dry runs', () => {
     await removeTree(root);
   });
 
+  it('refuses a range the published version does not satisfy (D19: only HEAD is installable)', async () => {
+    await expect(
+      install({ home, source: repo.source, version: '1.0.0' }),
+    ).rejects.toMatchObject({ code: 'E_VERSION_UNRESOLVED' });
+  }, 30_000);
+
   it('installs a single file and projects only that record', async () => {
     await install({
       home,
       source: repo.source,
-      version: '1.0.0',
+      version: '1.1.0',
       include: ['knowledge/principles/simple-first.md'],
     });
     const result = await sync({ home });
 
     const lock = await loadLock(path.join(home, 'environments/default/titw.lock'));
-    expect(lock.packages[FIXTURE_PACKAGE]?.version).toBe('1.0.0');
+    expect(lock.packages[FIXTURE_PACKAGE]?.version).toBe('1.1.0');
     expect(lock.packages[FIXTURE_PACKAGE]?.selection).toEqual([
       'knowledge/principles/simple-first.md',
     ]);
@@ -269,6 +277,55 @@ describe('selection and dry runs', () => {
       `${PKG}/knowledge/principles/simple-first.md`,
     ]);
   }, 30_000);
+
+  it('refuses a downgrade against the lock (D19: versions are monotonic)', async () => {
+    await publishFixtureVersion(repo, '0.9.0');
+    await expect(install({ home, source: repo.source })).rejects.toMatchObject({
+      code: 'E_VERSION_DOWNGRADE',
+    });
+    // A dry run reports the same refusal instead of a misleading success.
+    await expect(install({ home, source: repo.source, dryRun: true })).rejects.toMatchObject({
+      code: 'E_VERSION_DOWNGRADE',
+    });
+    await publishFixtureVersion(repo, '1.1.0');
+  }, 30_000);
+
+  it('update re-resolves the recorded range, refuses downgrades, reports no-ops', async () => {
+    // Re-install without --version so the recorded range floats (^1.1.0, D11).
+    await install({ home, source: repo.source, include: ['knowledge/principles/simple-first.md'] });
+
+    // Up to date: nothing to move.
+    const noop = await update({ home });
+    expect(noop.packages).toEqual([
+      { name: FIXTURE_PACKAGE, from: '1.1.0', to: '1.1.0', updated: false },
+    ]);
+
+    // Published version moved forward within the recorded ^1.1.0 range.
+    await publishFixtureVersion(repo, '1.2.0');
+    const moved = await update({ home });
+    expect(moved.packages).toEqual([
+      { name: FIXTURE_PACKAGE, from: '1.1.0', to: '1.2.0', updated: true },
+    ]);
+    const lock = await loadLock(path.join(home, 'environments/default/titw.lock'));
+    expect(lock.packages[FIXTURE_PACKAGE]?.version).toBe('1.2.0');
+    expect(lock.packages[FIXTURE_PACKAGE]?.selection).toEqual([
+      'knowledge/principles/simple-first.md',
+    ]);
+
+    // A regressed remote surfaces as a per-row error, not an aborted run.
+    await publishFixtureVersion(repo, '0.9.0');
+    const refused = await update({ home });
+    expect(refused.packages[0]).toMatchObject({ updated: false, to: null });
+    expect(refused.packages[0]?.error).toBeDefined();
+
+    // Unknown package name errors up front.
+    await expect(update({ home, package: '@titw/nope' })).rejects.toMatchObject({
+      code: 'E_NOT_FOUND',
+    });
+
+    // Restore the fixture for the tests that follow.
+    await publishFixtureVersion(repo, '1.1.0');
+  }, 60_000);
 
   it('leaves no state behind on a dry-run install', async () => {
     const dryHome = path.join(root, 'dry-home');

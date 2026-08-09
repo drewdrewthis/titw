@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { lt } from 'semver';
 import { TitwError } from '../core/errors.js';
 import { fetchPackage } from '../core/fetch.js';
 import { copyTree, rmTreeForce } from '../core/fsx.js';
@@ -90,11 +91,23 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
     dryRun: options.dryRun === true,
     warnings,
   };
+  const { manifest, lock } = await readEnvironment(context);
+
+  // D19: versions are monotonic — a source whose published version moved
+  // backwards is refused rather than silently replacing newer locked content.
+  // Checked before the dry-run return so a dry run reports the refusal too.
+  const locked = lock.packages[result.package];
+  if (locked !== undefined && lt(fetched.version, locked.version)) {
+    throw new TitwError(
+      'E_VERSION_DOWNGRADE',
+      `${result.package} is locked at ${locked.version}; ${source.canonical} now publishes ${fetched.version}`,
+      ['a published version must only increase (D19)', 'uninstall the package first to accept the downgrade'],
+    );
+  }
+
   if (result.dryRun) return result;
 
   await stageInstalledTree(fetched.dir, installedDir);
-
-  const { manifest, lock } = await readEnvironment(context);
   const selectionEntry: PackageSelection = {
     source: source.canonical,
     version: result.range,

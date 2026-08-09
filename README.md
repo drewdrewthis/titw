@@ -32,7 +32,8 @@ titw install path:../local-package --include knowledge/principles/simple-first.m
 titw sync                 # stage → validate → atomically activate → receipt
 titw status               # environment, packages, active projection
 titw files @scope/package # selected files and where each one projects
-titw outdated             # current / wanted / latest, from release tags
+titw outdated             # current / wanted / latest, from the published manifest version
+titw update [package]     # re-resolve locked package(s) against their recorded range
 titw rollback             # re-activate the previous projection
 ```
 
