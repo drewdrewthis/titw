@@ -173,3 +173,14 @@ every file and `titw status` reports modified/unowned paths without deleting the
 was a tripwire on top of that, and it broke packaged scripts by stripping the execute bit.
 Installed trees and projections now preserve each file's source mode. An edit to derived
 state is still clobbered by the next sync — reported as drift beforehand, not prevented.
+
+## D23 — The Claude projection root is `~/.claude/titw/`, added to the plugin's store list
+
+A single top-level vendor root, not per-store `vendor/` subdirs and not a hidden dotdir
+(ripgrep skips dotdirs by default, blinding fallback sweeps). Packages project verbatim
+(`titw/<pkg>/...`) — the plugin's `--kind` filter is frontmatter-based, so no kind-routing
+map is needed and the unknown-kind-drop class disappears. Activation stays a single atomic
+rename; one ownership boundary for receipts, drift, uninstall, and gitignore. Cost: the
+plugin's `STORES` list gains one entry (touching `stores.sh`, `lint-frontmatter.sh`
+scope, and the store-list drift test) — a policy call on whether codex lint applies to
+vendored records ships with that change.
