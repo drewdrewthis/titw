@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # record-scan.awk uses `nextfile`; ubuntu's default mawk lacks it.
+      - run: sudo apt-get update && sudo apt-get install -y gawk
       - uses: actions/setup-node@v4
         with:
           node-version: 22

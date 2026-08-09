@@ -58,8 +58,16 @@ export function classifyRecord(text: string): RecordInfo {
   const { data } = parseFrontmatter(text);
   const declaredKind = asString(data['kind']);
   const declaredType = asString(data['type']);
-  const kind = normalizeKind(declaredKind) ?? normalizeKind(declaredType);
-  const unknownKind = kind !== null ? null : (declaredKind ?? declaredType);
+  // A declared `kind:` — even an unknown one — is authoritative: deriving from
+  // `type:` instead would insert a duplicate `kind:` key above the existing one.
+  const kindFromDeclaredKind = normalizeKind(declaredKind);
+  const kind = kindFromDeclaredKind ?? (declaredKind === null ? normalizeKind(declaredType) : null);
+  const unknownKind =
+    declaredKind !== null && kindFromDeclaredKind === null
+      ? declaredKind
+      : kind === null
+        ? declaredType
+        : null;
 
   const declaredId = asString(data['id']);
   const namespacedId = asString(readPath(data, 'titw.id'));
@@ -93,7 +101,9 @@ export function normalizeRecordText(text: string): string {
   const fm = parseFrontmatter(out);
   if (!fm.present) return out;
   const keywords = asStringList(fm.data['keywords']);
-  const blockList = /^(\s*)keywords:[ \t]*\n(?:\1[ \t]+-[ \t].*\n?)+/m;
+  // Entries may be indented deeper than the key OR sit at the same indent —
+  // both are valid YAML block sequences.
+  const blockList = /^(\s*)keywords:[ \t]*\n(?:\1[ \t]*-[ \t].*\n?)+/m;
   if (keywords.length > 0 && blockList.test(fm.block)) {
     const header = out.slice(0, fm.bodyOffset);
     const body = out.slice(fm.bodyOffset);

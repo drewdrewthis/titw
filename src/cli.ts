@@ -57,11 +57,15 @@ export function buildProgram(): Command {
         if (source !== undefined) {
           throw new Error('install --frozen takes no source: it installs what titw.lock pins');
         }
+        if (options.version !== undefined || options.include.length > 0 || options.exclude.length > 0) {
+          throw new Error('install --frozen ignores nothing: --version/--include/--exclude are not allowed');
+        }
         const frozen = await installFrozen({
           ...(options.env === undefined ? {} : { environment: options.env }),
+          ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
         });
         emit(options.json, frozen, () => [
-          `installed ${frozen.packages.length} locked package(s)`,
+          `${frozen.dryRun ? 'would install' : 'installed'} ${frozen.packages.length} locked package(s)`,
           ...frozen.packages.map(
             (pkg) =>
               `  ${pkg.name}@${pkg.version}${pkg.commit === null ? '' : ` (${pkg.commit.slice(0, 7)})`}`,

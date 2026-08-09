@@ -66,7 +66,7 @@ export async function ensureRepo(source: PackageSource, cacheDir: string): Promi
   if (await pathExists(path.join(repoDir, '.git'))) {
     await git(['fetch', '--tags', '--prune', '--force', '--quiet', 'origin'], repoDir);
   } else {
-    await git(['clone', '--quiet', source.cloneUrl, repoDir]);
+    await git(['clone', '--quiet', '--', source.cloneUrl, repoDir]);
   }
   return repoDir;
 }
@@ -165,6 +165,11 @@ export async function fetchPackage(options: {
   const repoDir = await ensureRepo(source, cacheDir);
 
   if (options.commit !== undefined) {
+    if (!/^[0-9a-f]{40}$/.test(options.commit)) {
+      // A lock commit is always a full sha; anything else (including a value
+      // starting with "-") must never reach git's argument parser.
+      throw new TitwError('E_LOCK_INVALID', `not a commit sha: ${options.commit}`);
+    }
     await checkoutClean(repoDir, options.commit);
     const pinnedManifestPath = path.join(repoDir, PACKAGE_MANIFEST_FILENAME);
     if (!(await pathExists(pinnedManifestPath))) {

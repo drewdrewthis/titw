@@ -94,6 +94,11 @@ function tmpName(to: string): string {
 export async function rmTreeForce(target: string): Promise<void> {
   if (!(await pathExists(target))) return;
   const stat = await fs.lstat(target);
+  if (stat.isSymbolicLink()) {
+    // chmod would follow the link and touch a file outside the TITW tree.
+    await fs.unlink(target);
+    return;
+  }
   if (stat.isDirectory()) {
     await fs.chmod(target, 0o755).catch(() => undefined);
     for (const entry of await fs.readdir(target)) {

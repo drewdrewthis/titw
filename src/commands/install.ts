@@ -1,3 +1,4 @@
+import fs from 'node:fs/promises';
 import path from 'node:path';
 import { TitwError } from '../core/errors.js';
 import { fetchPackage } from '../core/fetch.js';
@@ -91,8 +92,7 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
   };
   if (result.dryRun) return result;
 
-  await rmTreeForce(installedDir);
-  await copyTree(fetched.dir, installedDir);
+  await stageInstalledTree(fetched.dir, installedDir);
 
   const { manifest, lock } = await readEnvironment(context);
   const selectionEntry: PackageSelection = {
@@ -133,6 +133,7 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
 
 export interface FrozenInstallResult {
   readonly packages: Array<{ readonly name: string; readonly version: string; readonly commit: string | null }>;
+  readonly dryRun: boolean;
 }
 
 /**
@@ -144,7 +145,9 @@ export interface FrozenInstallResult {
  * files to another machine and running this reproduces the same bytes
  * (handoff §18/§19).
  */
-export async function installFrozen(options: CommandOptions): Promise<FrozenInstallResult> {
+export async function installFrozen(
+  options: CommandOptions & { readonly dryRun?: boolean | undefined },
+): Promise<FrozenInstallResult> {
   const context = contextFor(options);
   const { manifest, lock, existed } = await readEnvironment(context);
   if (!existed) {
@@ -177,12 +180,30 @@ export async function installFrozen(options: CommandOptions): Promise<FrozenInst
         [`locked tree ${entry.treeHash}`, `fetched tree ${fetched.treeHash}`],
       );
     }
-    const installedDir = installedPackageDir(context.layout, name, entry.version);
-    await rmTreeForce(installedDir);
-    await copyTree(fetched.dir, installedDir);
+    if (options.dryRun !== true) {
+      const installedDir = installedPackageDir(context.layout, name, entry.version);
+      await stageInstalledTree(fetched.dir, installedDir);
+    }
     packages.push({ name, version: entry.version, commit: entry.commit });
   }
-  return { packages };
+  return { packages, dryRun: options.dryRun === true };
+}
+
+/**
+ * Replace an installed tree via stage-then-rename: copy into a sibling temp
+ * directory first so a mid-copy crash never leaves a partial tree the lock
+ * still names.
+ */
+async function stageInstalledTree(from: string, installedDir: string): Promise<void> {
+  const staged = `${installedDir}.staging-${process.pid}`;
+  await rmTreeForce(staged);
+  try {
+    await copyTree(from, staged);
+    await rmTreeForce(installedDir);
+    await fs.rename(staged, installedDir);
+  } finally {
+    await rmTreeForce(staged);
+  }
 }
 
 /** Hash inventory of the selected files, keyed by package-relative path. */

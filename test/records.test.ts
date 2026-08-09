@@ -83,6 +83,13 @@ describe('classifyRecord', () => {
     expect(info.kind).toBeNull();
     expect(info.unknownKind).toBe('evolution');
   });
+
+  it('never derives kind from type: when an explicit kind: exists (no duplicate key)', () => {
+    const info = classifyRecord('---\nkind: evolution\ntype: procedure\nid: x\n---\n# E\n');
+    expect(info.kind).toBeNull();
+    expect(info.unknownKind).toBe('evolution');
+    expect(info.compat).toEqual([]);
+  });
 });
 
 describe('normalizeRecordText', () => {
@@ -107,6 +114,12 @@ describe('normalizeRecordText', () => {
     expect(out).toMatch(/^keywords: \[alpha, beta\]$/m);
     expect(out).toContain('  - body text that must not be touched');
     expect(parseFrontmatter(out).data['keywords']).toEqual(['alpha', 'beta']);
+  });
+
+  it('normalizes a same-indent block sequence (valid YAML) too', () => {
+    const block = '---\nid: a\nkind: decision\nkeywords:\n- deployment\n- rollback\n---\n\n# A\n';
+    const out = normalizeRecordText(block);
+    expect(out).toMatch(/^keywords: \[deployment, rollback\]$/m);
   });
 
   it('folds CRLF to LF and strips a BOM so the awk scanner sees the fences', () => {

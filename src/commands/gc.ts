@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { TitwError } from '../core/errors.js';
 import { pathExists, rmTreeForce } from '../core/fsx.js';
 import { parseSource } from '../core/source.js';
 import { encodePackageName } from '../materialize/layout.js';
@@ -26,7 +27,14 @@ export interface GcResult {
  */
 export async function gc(options: GcOptions = {}): Promise<GcResult> {
   const context = contextFor(options);
-  const { lock } = await readEnvironment(context);
+  const { lock, existed } = await readEnvironment(context);
+  if (!existed) {
+    // installedDir/cacheDir are home-scoped: gc against a missing environment
+    // would read an empty default lock and delete everything.
+    throw new TitwError('E_NO_ENVIRONMENT', `no environment at ${context.env.manifest}`, [
+      'gc refuses to run without a lock to define what is still referenced',
+    ]);
+  }
   const dryRun = options.dryRun === true;
 
   const liveInstalled = new Set<string>();

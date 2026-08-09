@@ -122,6 +122,19 @@ describe('projection guard rails', () => {
       code: 'E_ENV_UNSUPPORTED',
     });
   });
+
+  it('gc refuses to run against a missing environment instead of deleting everything', async () => {
+    await expect(gc({ home: path.join(root, 'no-env-home') })).rejects.toMatchObject({
+      code: 'E_NO_ENVIRONMENT',
+    });
+  });
+
+  it('rejects an https source with a token in the username', async () => {
+    const { parseSource } = await import('../src/core/source.js');
+    expect(() => parseSource('git+https://x-access-token@github.com/o/r.git')).toThrowError(
+      /credentials/,
+    );
+  });
 });
 
 describe('fsx atomicity and mode preservation (D22)', () => {
@@ -162,6 +175,41 @@ describe('activation crash recovery', () => {
 
     await recoverInterruptedSwap(layout);
     expect(await fs.readFile(path.join(layout.active, 'kept.md'), 'utf8')).toBe('last good');
+    await removeTree(root);
+  });
+
+  it('promotes the journalled retired tree over a stale previous/', async () => {
+    const root = await makeTmpDir('crash2');
+    const layout = targetLayout(layoutFor(root), 'claude');
+    const gen = 'g2';
+    await fs.mkdir(layout.active, { recursive: true });
+    await fs.mkdir(layout.previous, { recursive: true });
+    await fs.writeFile(path.join(layout.previous, 'stale.md'), 'older generation');
+    await fs.mkdir(path.join(layout.root, `.prev-${gen}`), { recursive: true });
+    await fs.writeFile(path.join(layout.root, `.prev-${gen}`, 'kept.md'), 'journalled');
+    await fs.writeFile(path.join(layout.root, '.swap.json'), JSON.stringify({ generation: gen }));
+
+    await recoverInterruptedSwap(layout);
+    expect(await fs.readFile(path.join(layout.previous, 'kept.md'), 'utf8')).toBe('journalled');
+    await removeTree(root);
+  });
+
+  it('recovers an interrupted rollback: the parked tree is never lost to pruning', async () => {
+    const root = await makeTmpDir('crash3');
+    const layout = targetLayout(layoutFor(root), 'claude');
+    // Crash right after active→parked: no active, previous still in place.
+    await fs.mkdir(layout.previous, { recursive: true });
+    await fs.writeFile(path.join(layout.previous, 'old.md'), 'restore me');
+    await fs.mkdir(path.join(layout.root, '.rollback-123'), { recursive: true });
+    await fs.writeFile(path.join(layout.root, '.rollback-123', 'was-active.md'), 'park me');
+    await fs.writeFile(
+      path.join(layout.root, '.swap.json'),
+      JSON.stringify({ generation: 'rollback', rollback: '.rollback-123' }),
+    );
+
+    await recoverInterruptedSwap(layout);
+    expect(await fs.readFile(path.join(layout.active, 'old.md'), 'utf8')).toBe('restore me');
+    expect(await fs.readFile(path.join(layout.previous, 'was-active.md'), 'utf8')).toBe('park me');
     await removeTree(root);
   });
 });

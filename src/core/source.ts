@@ -106,7 +106,10 @@ function assertNoCredentials(cloneUrl: string, raw: string): void {
   } catch {
     throw new TitwError('E_SOURCE_INVALID', `not a valid URL: ${raw}`);
   }
-  if (parsed.password !== '') {
+  const hasHttpCredentials =
+    (parsed.protocol === 'http:' || parsed.protocol === 'https:') &&
+    (parsed.username !== '' || parsed.password !== '');
+  if (hasHttpCredentials || parsed.password !== '') {
     throw new TitwError(
       'E_SOURCE_CREDENTIALS',
       'source must not embed credentials',

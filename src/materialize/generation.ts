@@ -16,6 +16,8 @@ const SWAP_JOURNAL = '.swap.json';
 
 interface SwapJournal {
   readonly generation: string;
+  /** Present when the journalled operation is a rollback: the parked dir name. */
+  readonly rollback?: string;
 }
 
 function journalFile(target: TargetLayout): string {
@@ -69,6 +71,21 @@ export async function recoverInterruptedSwap(target: TargetLayout): Promise<void
   const file = journalFile(target);
   if (!(await pathExists(file))) return;
   const journal = JSON.parse(await fs.readFile(file, 'utf8')) as SwapJournal;
+
+  if (journal.rollback !== undefined) {
+    // Interrupted rollback: active→parked, previous→active, parked→previous.
+    const parked = path.join(target.root, journal.rollback);
+    if (!(await pathExists(target.active))) {
+      if (await pathExists(target.previous)) await fs.rename(target.previous, target.active);
+      else if (await pathExists(parked)) await fs.rename(parked, target.active);
+    }
+    if ((await pathExists(parked)) && !(await pathExists(target.previous))) {
+      await fs.rename(parked, target.previous);
+    }
+    await fs.rm(file, { force: true });
+    return;
+  }
+
   const incoming = path.join(target.root, `.next-${journal.generation}`);
   const retired = path.join(target.root, `.prev-${journal.generation}`);
 
@@ -77,8 +94,11 @@ export async function recoverInterruptedSwap(target: TargetLayout): Promise<void
     if (await pathExists(incoming)) await fs.rename(incoming, target.active);
     else if (await pathExists(retired)) await fs.rename(retired, target.active);
   }
-  if ((await pathExists(retired)) && !(await pathExists(target.previous))) {
-    // Crashed before the retired tree was promoted to previous/.
+  if (await pathExists(retired)) {
+    // The retired tree is the journalled truth for previous/ — whatever sits
+    // there belongs to an older generation and would otherwise be pruned as a
+    // receipt-referenced orphan.
+    await rmTreeForce(target.previous);
     await fs.rename(retired, target.previous);
   }
   await fs.rm(file, { force: true });
@@ -97,13 +117,18 @@ export async function rollbackTarget(target: TargetLayout): Promise<void> {
       `target "${target.id}" has no previous generation to roll back to`,
     );
   }
-  const parked = path.join(target.root, `.rollback-${Date.now()}`);
+  const parkedName = `.rollback-${Date.now()}`;
+  const parked = path.join(target.root, parkedName);
   await rmTreeForce(parked);
+
+  const journal: SwapJournal = { generation: 'rollback', rollback: parkedName };
+  await writeFile(journalFile(target), `${JSON.stringify(journal)}\n`);
 
   const hadActive = await pathExists(target.active);
   if (hadActive) await fs.rename(target.active, parked);
   await fs.rename(target.previous, target.active);
   if (hadActive) await fs.rename(parked, target.previous);
+  await fs.rm(journalFile(target), { force: true });
 }
 
 /**
