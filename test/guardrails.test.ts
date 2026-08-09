@@ -154,6 +154,14 @@ describe('fsx atomicity and mode preservation (D22)', () => {
     expect((await fs.readdir(root)).filter((f) => f.includes('.tmp-'))).toEqual([]);
   });
 
+  it('walkFiles skips crashed atomic-write leftovers so they never enter a receipt', async () => {
+    const dir = path.join(root, 'walk-tmp');
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, 'real.md'), 'x');
+    await fs.writeFile(path.join(dir, 'lock.json.tmp-4242'), 'crashed leftover');
+    expect(await walkFiles(dir)).toEqual(['real.md']);
+  });
+
   it('copyFile preserves the execute bit', async () => {
     const src = path.join(root, 'tool.sh');
     await fs.writeFile(src, '#!/bin/sh\n');
