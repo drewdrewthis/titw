@@ -91,12 +91,11 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
     dryRun: options.dryRun === true,
     warnings,
   };
-  if (result.dryRun) return result;
-
   const { manifest, lock } = await readEnvironment(context);
 
   // D19: versions are monotonic — a source whose published version moved
   // backwards is refused rather than silently replacing newer locked content.
+  // Checked before the dry-run return so a dry run reports the refusal too.
   const locked = lock.packages[result.package];
   if (locked !== undefined && lt(fetched.version, locked.version)) {
     throw new TitwError(
@@ -105,6 +104,8 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
       ['a published version must only increase (D19)', 'uninstall the package first to accept the downgrade'],
     );
   }
+
+  if (result.dryRun) return result;
 
   await stageInstalledTree(fetched.dir, installedDir);
   const selectionEntry: PackageSelection = {

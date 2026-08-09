@@ -282,6 +282,10 @@ describe('selection and dry runs', () => {
     await expect(install({ home, source: repo.source })).rejects.toMatchObject({
       code: 'E_VERSION_DOWNGRADE',
     });
+    // A dry run reports the same refusal instead of a misleading success.
+    await expect(install({ home, source: repo.source, dryRun: true })).rejects.toMatchObject({
+      code: 'E_VERSION_DOWNGRADE',
+    });
     await publishFixtureVersion(repo, '1.1.0');
   }, 30_000);
 
