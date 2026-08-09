@@ -2,9 +2,6 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { TitwError } from './errors.js';
 
-/** Mode applied to materialized files: readable by all, writable by none. */
-export const READ_ONLY_FILE_MODE = 0o444;
-
 /** True when the path exists (of any type). */
 export async function pathExists(target: string): Promise<boolean> {
   try {
@@ -45,6 +42,7 @@ export async function walkFiles(root: string, skip: readonly string[] = ['.git']
         if (skipSet.has(entry.name)) continue;
         await walk(path.join(dir, entry.name), rel);
       } else if (entry.isFile()) {
+        if (/\.tmp-\d+$/.test(entry.name)) continue; // crashed atomic-write leftover
         out.push(rel);
       }
     }
@@ -59,20 +57,32 @@ export function comparePaths(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-/** Copy one file, creating parents, and stamp `mode` on the destination. */
-export async function copyFile(from: string, to: string, mode?: number): Promise<void> {
+/**
+ * Copy one file, creating parents. The destination keeps the source's mode
+ * (DECISIONS D22): a packaged script stays executable after materialization.
+ */
+export async function copyFile(from: string, to: string): Promise<void> {
   await ensureDir(path.dirname(to));
-  await fs.rm(to, { force: true });
-  await fs.copyFile(from, to);
-  if (mode !== undefined) await fs.chmod(to, mode);
+  const tmp = tmpName(to);
+  await fs.copyFile(from, tmp);
+  await fs.chmod(tmp, (await fs.stat(from)).mode & 0o777);
+  await fs.rename(tmp, to);
 }
 
-/** Write a file, creating parents, and stamp `mode` on it. */
+/**
+ * Write a file atomically: write `<path>.tmp-<pid>`, then rename over the
+ * target. A crash mid-write can never truncate `titw.lock` or a receipt.
+ */
 export async function writeFile(to: string, contents: string | Buffer, mode?: number): Promise<void> {
   await ensureDir(path.dirname(to));
-  await fs.rm(to, { force: true });
-  await fs.writeFile(to, contents);
-  if (mode !== undefined) await fs.chmod(to, mode);
+  const tmp = tmpName(to);
+  await fs.writeFile(tmp, contents);
+  if (mode !== undefined) await fs.chmod(tmp, mode);
+  await fs.rename(tmp, to);
+}
+
+function tmpName(to: string): string {
+  return `${to}.tmp-${process.pid}`;
 }
 
 /**
@@ -96,16 +106,11 @@ export async function rmTreeForce(target: string): Promise<void> {
   await fs.rm(target, { force: true });
 }
 
-/**
- * Copy a whole tree, file by file, applying `mode` to each copied file.
- *
- * Directories keep default permissions so the tree stays traversable and
- * removable; only files are frozen (handoff invariant 10).
- */
-export async function copyTree(from: string, to: string, mode?: number): Promise<string[]> {
+/** Copy a whole tree, file by file; each file keeps its source mode (D22). */
+export async function copyTree(from: string, to: string): Promise<string[]> {
   const files = await walkFiles(from);
   for (const rel of files) {
-    await copyFile(path.join(from, ...rel.split('/')), path.join(to, ...rel.split('/')), mode);
+    await copyFile(path.join(from, ...rel.split('/')), path.join(to, ...rel.split('/')));
   }
   return files;
 }

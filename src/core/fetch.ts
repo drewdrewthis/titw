@@ -71,6 +71,18 @@ export async function ensureRepo(source: PackageSource, cacheDir: string): Promi
   return repoDir;
 }
 
+/**
+ * Check out a ref and scrub the working tree.
+ *
+ * `git clean -xdff` removes untracked and ignored leftovers a previous
+ * checkout left behind — without it a warm cache and a fresh clone disagree
+ * on `treeHash` for the same commit.
+ */
+async function checkoutClean(repoDir: string, ref: string): Promise<void> {
+  await git(['checkout', '--quiet', '--detach', '--force', ref], repoDir);
+  await git(['clean', '-xdff', '--quiet'], repoDir);
+}
+
 /** List the release tags of a repository, newest version first. */
 export async function listVersions(repoDir: string): Promise<ReleaseTag[]> {
   const stdout = await git(['tag', '--list'], repoDir);
@@ -126,6 +138,8 @@ export async function fetchPackage(options: {
   source: PackageSource;
   range: string;
   cacheDir: string;
+  /** Exact commit to check out, bypassing version resolution (frozen installs). */
+  commit?: string | undefined;
 }): Promise<FetchedPackage> {
   const { source, range, cacheDir } = options;
 
@@ -149,6 +163,20 @@ export async function fetchPackage(options: {
   }
 
   const repoDir = await ensureRepo(source, cacheDir);
+
+  if (options.commit !== undefined) {
+    await checkoutClean(repoDir, options.commit);
+    const pinnedManifestPath = path.join(repoDir, PACKAGE_MANIFEST_FILENAME);
+    if (!(await pathExists(pinnedManifestPath))) {
+      throw new TitwError(
+        'E_NOT_FOUND',
+        `${source.canonical}@${options.commit.slice(0, 7)} has no ${PACKAGE_MANIFEST_FILENAME}`,
+      );
+    }
+    const pinnedManifest = await loadPackageManifest(pinnedManifestPath);
+    return describe(source, repoDir, pinnedManifest, pinnedManifest.version, options.commit);
+  }
+
   const tags = await listVersions(repoDir);
   if (tags.length === 0) {
     throw new TitwError(
@@ -165,7 +193,7 @@ export async function fetchPackage(options: {
       [`available: ${tags.map((tag) => tag.version).join(', ')}`],
     );
   }
-  await git(['checkout', '--quiet', '--detach', '--force', picked.ref], repoDir);
+  await checkoutClean(repoDir, picked.ref);
   const commit = (await git(['rev-parse', 'HEAD'], repoDir)).trim();
 
   const manifestPath = path.join(repoDir, PACKAGE_MANIFEST_FILENAME);

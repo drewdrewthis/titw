@@ -1,11 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { insertFrontmatterKeys, parseFrontmatter } from '../src/core/frontmatter.js';
 import {
-  RECORD_STORES,
+  RECORD_KINDS,
   classifyRecord,
   normalizeKind,
-  projectionPath,
-  storeForKind,
+  normalizeRecordText,
 } from '../src/targets/claude/records.js';
 
 const SIX_KEY = [
@@ -36,17 +35,11 @@ const OKF = [
   '',
 ].join('\n');
 
-describe('kind mapping', () => {
-  it('maps every record kind to the store the procedures plugin scans (D5)', () => {
-    expect(RECORD_STORES).toEqual({
-      'failure-mode': 'references/failure-modes',
-      decision: 'references/decisions',
-      solution: 'references/solutions',
-      procedure: 'references/procedures',
-      research: 'references/research',
-      plan: 'plans',
-      principle: 'references/principles',
-    });
+describe('kind recognition', () => {
+  it('recognizes the seven record kinds the plugin uses (D5)', () => {
+    expect([...RECORD_KINDS].sort()).toEqual(
+      ['decision', 'failure-mode', 'plan', 'principle', 'procedure', 'research', 'solution'].sort(),
+    );
   });
 
   it('normalizes an OKF type to a record kind', () => {
@@ -54,28 +47,6 @@ describe('kind mapping', () => {
     expect(normalizeKind('Failure Mode')).toBe('failure-mode');
     expect(normalizeKind('Concept')).toBeNull();
     expect(normalizeKind(null)).toBeNull();
-  });
-
-  it('returns no store for a non-record kind', () => {
-    expect(storeForKind('skill')).toBeNull();
-  });
-});
-
-describe('projectionPath', () => {
-  it('preserves the subpath following the store directory', () => {
-    expect(
-      projectionPath('references/procedures', 'knowledge/procedures/deploy/PROCEDURE.md'),
-    ).toBe('references/procedures/deploy/PROCEDURE.md');
-    expect(projectionPath('references/principles', 'knowledge/principles/simple-first.md')).toBe(
-      'references/principles/simple-first.md',
-    );
-    expect(projectionPath('plans', 'plans/ship-v1.md')).toBe('plans/ship-v1.md');
-  });
-
-  it('falls back to the basename when no store directory appears in the path', () => {
-    expect(projectionPath('references/decisions', 'docs/notes/pick-yaml.md')).toBe(
-      'references/decisions/pick-yaml.md',
-    );
   });
 });
 
@@ -85,6 +56,7 @@ describe('classifyRecord', () => {
     expect(info.kind).toBe('procedure');
     expect(info.id).toBe('proc.deploy.fixture');
     expect(info.compat).toEqual([]);
+    expect(info.unknownKind).toBeNull();
   });
 
   it('derives compat id/kind/keywords for an OKF-native record from titw.id, type, tags', () => {
@@ -103,12 +75,50 @@ describe('classifyRecord', () => {
     expect(info.kind).toBeNull();
     expect(info.id).toBeNull();
     expect(info.compat).toEqual([]);
+    expect(info.unknownKind).toBeNull();
   });
 
-  it('leaves a non-record OKF concept undecorated even when it has tags', () => {
-    const info = classifyRecord('---\ntype: Concept\ntags: [a, b]\n---\n\n# Concept\n');
+  it('reports an unrecognized declared kind so the projection can warn (never drop)', () => {
+    const info = classifyRecord('---\nkind: evolution\nid: x\n---\n# E\n');
     expect(info.kind).toBeNull();
-    expect(info.compat).toEqual([]);
+    expect(info.unknownKind).toBe('evolution');
+  });
+});
+
+describe('normalizeRecordText', () => {
+  it('rewrites a block-style keywords list to the inline form the matcher tokenizes', () => {
+    const block = [
+      '---',
+      'id: prin.block-keys',
+      'kind: principle',
+      'keywords:',
+      '  - alpha',
+      '  - beta',
+      'status: active',
+      '---',
+      '',
+      '# Block keys',
+      '',
+      'keywords:',
+      '  - body text that must not be touched',
+      '',
+    ].join('\n');
+    const out = normalizeRecordText(block);
+    expect(out).toMatch(/^keywords: \[alpha, beta\]$/m);
+    expect(out).toContain('  - body text that must not be touched');
+    expect(parseFrontmatter(out).data['keywords']).toEqual(['alpha', 'beta']);
+  });
+
+  it('folds CRLF to LF and strips a BOM so the awk scanner sees the fences', () => {
+    const crlf = `﻿---\r\nid: a\r\nkind: decision\r\nkeywords: [x]\r\n---\r\n\r\n# A\r\n`;
+    const out = normalizeRecordText(crlf);
+    expect(out.charCodeAt(0)).not.toBe(0xfeff);
+    expect(out).not.toContain('\r');
+    expect(parseFrontmatter(out).data['id']).toBe('a');
+  });
+
+  it('leaves an already-normalized document byte-identical', () => {
+    expect(normalizeRecordText(SIX_KEY)).toBe(SIX_KEY);
   });
 });
 

@@ -191,6 +191,7 @@ export async function writeFixturePackage(root: string, version: string): Promis
     }),
   );
   await write(root, 'scripts/verify.sh', '#!/usr/bin/env bash\necho fixture\n');
+  await fs.chmod(path.join(root, 'scripts', 'verify.sh'), 0o755);
 
   if (version !== '1.0.0') {
     await write(

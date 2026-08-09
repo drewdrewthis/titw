@@ -2,15 +2,13 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { TitwError } from '../../core/errors.js';
 import { insertFrontmatterKeys } from '../../core/frontmatter.js';
-import { READ_ONLY_FILE_MODE, comparePaths, copyFile, writeFile } from '../../core/fsx.js';
+import { comparePaths, copyFile, writeFile } from '../../core/fsx.js';
 import { encodePackageName } from '../../materialize/layout.js';
 import type { Target, TargetBuildInput, TargetBuildResult, TargetPackageInput } from '../types.js';
-import { classifyRecord, projectionPath, storeForKind } from './records.js';
+import { classifyRecord, normalizeRecordText } from './records.js';
 
-/** Directory inside the projection that the procedures plugin is pointed at. */
+/** Directory inside the projection that becomes the plugin's `titw` store (D23). */
 export const CORPUS_DIR = 'corpus';
-/** Directory holding selected non-record files, so nothing selected goes unmaterialized. */
-export const FILES_DIR = 'files';
 /** Provenance catalog filename (handoff §14). */
 export const CATALOG_FILENAME = 'catalog.json';
 
@@ -29,24 +27,24 @@ export interface CatalogEntry {
 export type Catalog = Record<string, CatalogEntry>;
 
 /**
- * Claude Code target: projects selected records into the seven-store corpus
- * layout the `procedures` plugin queries (DECISIONS D5).
- *
- * The plugin is pointed at `<active>/corpus` via `QUERY_RECORDS_ROOT`; the
- * plugin itself is never modified.
+ * Claude Code target: projects each package verbatim under
+ * `corpus/<encoded package name>/<source path>` (DECISIONS D23). The corpus
+ * directory is what lands in the plugin's `titw` store; the plugin's `--kind`
+ * filter is frontmatter-based, so no kind routing happens here — a selected
+ * byte is never re-homed or dropped.
  */
 export class ClaudeTarget implements Target {
   readonly id = 'claude';
 
   async build(input: TargetBuildInput): Promise<TargetBuildResult> {
-    const catalog: Catalog = {};
-    const written = new Map<string, string>();
+    const catalog: Catalog = Object.create(null) as Catalog;
+    const paths: string[] = [];
     const warnings: string[] = [];
 
     for (const pkg of input.packages) {
       for (const sourcePath of pkg.files) {
-        const placed = await this.placeFile(input.outDir, pkg, sourcePath, written);
-        if (placed === null) continue;
+        const placed = await this.placeFile(input.outDir, pkg, sourcePath, warnings);
+        paths.push(placed.targetPath);
         this.record(catalog, placed.key, {
           package: pkg.name,
           version: pkg.version,
@@ -63,57 +61,44 @@ export class ClaudeTarget implements Target {
     await writeFile(
       path.join(input.outDir, CATALOG_FILENAME),
       `${JSON.stringify(sortCatalog(catalog), null, 2)}\n`,
-      READ_ONLY_FILE_MODE,
     );
 
-    return {
-      paths: [...written.keys(), CATALOG_FILENAME].sort(comparePaths),
-      warnings,
-    };
+    return { paths: [...paths, CATALOG_FILENAME].sort(comparePaths), warnings };
   }
 
   /**
-   * Copy one selected file to its projected location.
-   *
-   * Markdown carrying a known record kind lands in its store; everything else
-   * lands under `files/<package>/` so a selected byte is never silently
-   * dropped from the projection.
+   * Materialize one selected file at its verbatim projected path. Markdown is
+   * normalized for the plugin's scanner (BOM/CRLF/keywords) and, when it is a
+   * recognized record, decorated with compat frontmatter; everything else is
+   * copied byte-for-byte with its mode preserved (D22).
    */
   private async placeFile(
     outDir: string,
     pkg: TargetPackageInput,
     sourcePath: string,
-    written: Map<string, string>,
-  ): Promise<{ targetPath: string; key: string } | null> {
+    warnings: string[],
+  ): Promise<{ targetPath: string; key: string }> {
     const absSource = path.join(pkg.rootDir, ...sourcePath.split('/'));
-    const isMarkdown = sourcePath.toLowerCase().endsWith('.md');
-    const text = isMarkdown ? await fs.readFile(absSource, 'utf8') : null;
-    const info = text === null ? null : classifyRecord(text);
-    const store = info === null ? null : storeForKind(info.kind);
+    const targetPath = `${CORPUS_DIR}/${encodePackageName(pkg.name)}/${sourcePath}`;
+    const absTarget = path.join(outDir, ...targetPath.split('/'));
 
-    const targetPath =
-      store === null
-        ? `${FILES_DIR}/${encodePackageName(pkg.name)}/${sourcePath}`
-        : `${CORPUS_DIR}/${projectionPath(store, sourcePath)}`;
+    if (!sourcePath.toLowerCase().endsWith('.md')) {
+      await copyFile(absSource, absTarget);
+      return { targetPath, key: targetPath };
+    }
 
-    const owner = written.get(targetPath);
-    if (owner !== undefined) {
-      throw new TitwError(
-        'E_TARGET_CONFLICT',
-        `two selected files project to the same path: ${targetPath}`,
-        [owner, `${pkg.name}:${sourcePath}`],
+    const text = normalizeRecordText(await fs.readFile(absSource, 'utf8'));
+    const info = classifyRecord(text);
+    if (info.unknownKind !== null) {
+      warnings.push(
+        `${pkg.name}:${sourcePath}: unrecognized kind "${info.unknownKind}" — projected verbatim, not decorated`,
       );
     }
-    written.set(targetPath, `${pkg.name}:${sourcePath}`);
-
-    const absTarget = path.join(outDir, ...targetPath.split('/'));
-    if (text !== null && info !== null && info.compat.length > 0) {
-      await writeFile(absTarget, insertFrontmatterKeys(text, info.compat), READ_ONLY_FILE_MODE);
-    } else {
-      await copyFile(absSource, absTarget, READ_ONLY_FILE_MODE);
-    }
-
-    return { targetPath, key: info?.id ?? targetPath };
+    await writeFile(
+      absTarget,
+      info.compat.length > 0 ? insertFrontmatterKeys(text, info.compat) : text,
+    );
+    return { targetPath, key: info.id ?? targetPath };
   }
 
   private record(catalog: Catalog, key: string, entry: CatalogEntry): void {
@@ -129,7 +114,7 @@ export class ClaudeTarget implements Target {
 }
 
 function sortCatalog(catalog: Catalog): Catalog {
-  const sorted: Catalog = {};
+  const sorted: Catalog = Object.create(null) as Catalog;
   for (const key of Object.keys(catalog).sort(comparePaths)) {
     const entry = catalog[key];
     if (entry !== undefined) sorted[key] = entry;

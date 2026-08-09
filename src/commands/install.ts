@@ -1,7 +1,7 @@
 import path from 'node:path';
 import { TitwError } from '../core/errors.js';
 import { fetchPackage } from '../core/fetch.js';
-import { READ_ONLY_FILE_MODE, copyTree, rmTreeForce } from '../core/fsx.js';
+import { copyTree, rmTreeForce } from '../core/fsx.js';
 import { hashFile } from '../core/hash.js';
 import type { EnvironmentManifest, Lock, LockEntry, PackageSelection } from '../core/manifest.js';
 import { selectFiles, validateSelectors } from '../core/select.js';
@@ -64,6 +64,11 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
   const warnings = [
     ...selection.unmatchedInclude.map((p) => `--include "${p}" matched no exported file`),
     ...selection.unmatchedExclude.map((p) => `--exclude "${p}" subtracted nothing`),
+    // D3: these manifest keys are validated but inert until active-component
+    // support (D4) lands — say so instead of silently ignoring them.
+    ...(['dependencies', 'components'] as const)
+      .filter((key) => fetched.manifest[key] !== undefined)
+      .map((key) => `${fetched.manifest.name} declares "${key}", which titw v0 does not act on yet`),
   ];
 
   const installedDir = installedPackageDir(
@@ -87,7 +92,7 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
   if (result.dryRun) return result;
 
   await rmTreeForce(installedDir);
-  await copyTree(fetched.dir, installedDir, READ_ONLY_FILE_MODE);
+  await copyTree(fetched.dir, installedDir);
 
   const { manifest, lock } = await readEnvironment(context);
   const selectionEntry: PackageSelection = {
@@ -124,6 +129,60 @@ export async function install(options: InstallOptions): Promise<InstallResult> {
 
   await writeEnvironment(context, nextManifest, nextLock);
   return result;
+}
+
+export interface FrozenInstallResult {
+  readonly packages: Array<{ readonly name: string; readonly version: string; readonly commit: string | null }>;
+}
+
+/**
+ * Reproduce every locked package exactly (`titw install --frozen`).
+ *
+ * The lock is the input: each entry is fetched at its pinned commit and must
+ * hash to the locked `treeHash`/`manifestHash`. Nothing is resolved from a
+ * range and neither `titw.yaml` nor `titw.lock` is rewritten — copying both
+ * files to another machine and running this reproduces the same bytes
+ * (handoff §18/§19).
+ */
+export async function installFrozen(options: CommandOptions): Promise<FrozenInstallResult> {
+  const context = contextFor(options);
+  const { manifest, lock, existed } = await readEnvironment(context);
+  if (!existed) {
+    throw new TitwError('E_NO_ENVIRONMENT', `no environment at ${context.env.manifest}`);
+  }
+
+  const names = Object.keys(manifest.packages).sort();
+  const packages: FrozenInstallResult['packages'] = [];
+  for (const name of names) {
+    const entry = lock.packages[name];
+    if (entry === undefined) {
+      throw new TitwError('E_LOCK_MISSING', `${name} is in titw.yaml but not in titw.lock`, [
+        'a frozen install never rewrites the lock; run "titw install <source>" to lock it first',
+      ]);
+    }
+    const source = parseSource(entry.source, { baseDir: context.cwd });
+    if (entry.commit === null) {
+      throw new TitwError('E_FROZEN_UNSUPPORTED', `${name} is a path: source and cannot be frozen`);
+    }
+    const fetched = await fetchPackage({
+      source,
+      range: entry.range,
+      cacheDir: context.layout.cacheDir,
+      commit: entry.commit,
+    });
+    if (fetched.treeHash !== entry.treeHash || fetched.manifestHash !== entry.manifestHash) {
+      throw new TitwError(
+        'E_FROZEN_CHANGED',
+        `${name}@${entry.version} at ${entry.commit.slice(0, 7)} does not match titw.lock`,
+        [`locked tree ${entry.treeHash}`, `fetched tree ${fetched.treeHash}`],
+      );
+    }
+    const installedDir = installedPackageDir(context.layout, name, entry.version);
+    await rmTreeForce(installedDir);
+    await copyTree(fetched.dir, installedDir);
+    packages.push({ name, version: entry.version, commit: entry.commit });
+  }
+  return { packages };
 }
 
 /** Hash inventory of the selected files, keyed by package-relative path. */

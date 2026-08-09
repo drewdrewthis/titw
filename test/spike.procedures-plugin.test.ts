@@ -1,30 +1,30 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import os from 'node:os';
+import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { install } from '../src/commands/install.js';
 import { sync } from '../src/commands/sync.js';
+import { CORPUS_DIR } from '../src/targets/claude/index.js';
 import { FIXTURE_KEYWORD, buildFixtureRepo, makeTmpDir, removeTree } from './helpers/fixture.js';
 
 const run = promisify(execFile);
 
 /**
- * The real, separately-installed plugin script — not a copy. The spike proves
- * TITW's projection is queryable by the machinery as shipped (handoff §21 step
- * 5), so a vendored copy would prove nothing.
+ * The procedures plugin's query machinery, vendored at a pinned version
+ * (test/fixtures/plugin/VERSION) with the D23 `titw` store added to its
+ * store list. Vendoring makes this spike run on every machine and in CI —
+ * it can never silently skip.
  */
-const QUERY_RECORDS = path.join(
-  os.homedir(),
-  '.claude/plugins/marketplaces/drewdrewthis/plugins/procedures/scripts/query-records.sh',
+const QUERY_RECORDS = fileURLToPath(
+  new URL('./fixtures/plugin/scripts/query-records.sh', import.meta.url),
 );
 
-const installed = existsSync(QUERY_RECORDS);
-
-describe.skipIf(!installed)('spike: the procedures plugin queries the active TITW corpus', () => {
+describe('spike: the procedures plugin queries the projected titw store (D23)', () => {
   let root: string;
-  let corpus: string;
+  /** Directory standing in for `~/.claude`: holds `titw/` = the projected corpus. */
+  let claudeRoot: string;
 
   beforeAll(async () => {
     root = await makeTmpDir('spike');
@@ -33,7 +33,11 @@ describe.skipIf(!installed)('spike: the procedures plugin queries the active TIT
 
     await install({ home, source: repo.source });
     const result = await sync({ home });
-    corpus = path.join(result.targets[0]?.root ?? '', 'corpus');
+    const corpus = path.join(result.targets[0]?.root ?? '', CORPUS_DIR);
+
+    claudeRoot = path.join(root, 'claude-root');
+    await fs.mkdir(claudeRoot, { recursive: true });
+    await fs.cp(corpus, path.join(claudeRoot, 'titw'), { recursive: true });
   }, 60_000);
 
   afterAll(async () => {
@@ -41,46 +45,46 @@ describe.skipIf(!installed)('spike: the procedures plugin queries the active TIT
   });
 
   async function query(args: readonly string[]): Promise<string> {
-    const { stdout } = await run(QUERY_RECORDS, [...args], {
-      env: { ...process.env, QUERY_RECORDS_ROOT: corpus },
+    const { stdout } = await run('bash', [QUERY_RECORDS, ...args], {
+      env: { ...process.env, QUERY_RECORDS_ROOT: claudeRoot },
     });
     return stdout;
   }
 
-  it('finds a six-key fixture record by keyword', async () => {
+  it('finds a six-key fixture record by keyword at its verbatim path', async () => {
     const stdout = await query(['--keyword', FIXTURE_KEYWORD]);
-    expect(stdout).toContain('references/procedures/deploy/PROCEDURE.md');
+    expect(stdout).toContain('titw/@titw+fixture-way/knowledge/procedures/deploy/PROCEDURE.md');
     expect(stdout).toContain('Deploy the fixture');
   });
 
   it('finds the OKF-native record, proving the compat keys are what it matches on', async () => {
     const stdout = await query(['--keyword', 'okf frontmatter']);
-    expect(stdout).toContain('references/research/okf-adoption.md');
+    expect(stdout).toContain('titw/@titw+fixture-way/knowledge/research/okf-adoption.md');
   });
 
-  it('reaches every projected store', async () => {
+  it('finds every projected record kind through the single titw store', async () => {
     const stdout = await query(['--keyword', FIXTURE_KEYWORD]);
     for (const expected of [
-      'references/procedures/',
-      'references/principles/',
-      'references/decisions/',
-      'references/solutions/',
-      'references/failure-modes/',
-      'references/research/',
-      'plans/',
+      'knowledge/procedures/deploy/PROCEDURE.md',
+      'knowledge/principles/simple-first.md',
+      'knowledge/decisions/2026-08-08-use-yaml.md',
+      'knowledge/solutions/2026-08-08-tag-resolution.md',
+      'knowledge/failure-modes/stale-projection.md',
+      'knowledge/research/okf-adoption.md',
+      'plans/ship-v1.md',
     ]) {
       expect(stdout).toContain(expected);
     }
   });
 
-  it('answers a structural --kind query against the projection', async () => {
+  it('answers a structural --kind query from frontmatter, not directory placement', async () => {
     const stdout = await query(['--kind', 'procedure']);
-    expect(stdout).toContain('references/procedures/deploy/PROCEDURE.md');
-    expect(stdout).not.toContain('references/principles/');
+    expect(stdout).toContain('knowledge/procedures/deploy/PROCEDURE.md');
+    expect(stdout).not.toContain('simple-first.md');
   });
 
   it('finds a record by its stable id', async () => {
     const stdout = await query(['--id', 'res.okf-adoption']);
-    expect(stdout).toContain('references/research/okf-adoption.md');
+    expect(stdout).toContain('okf-adoption.md');
   });
 });

@@ -6,6 +6,7 @@ import { hashFile, hashTree } from '../core/hash.js';
 import {
   PACKAGE_MANIFEST_FILENAME,
   loadPackageManifest,
+  renderLock,
   type Lock,
   type LockEntry,
   type PackageSelection,
@@ -35,7 +36,7 @@ import {
   contextFor,
   enabledTargets,
   readEnvironment,
-  writeEnvironment,
+  writeLock,
   type CommandContext,
   type CommandOptions,
 } from './context.js';
@@ -43,6 +44,8 @@ import { inventory } from './install.js';
 
 export interface SyncOptions extends CommandOptions {
   readonly dryRun?: boolean | undefined;
+  /** Refuse to run if syncing would change `titw.lock`. */
+  readonly locked?: boolean | undefined;
   /** Fixed generation id, for reproducible tests. */
   readonly generation?: string | undefined;
 }
@@ -111,7 +114,16 @@ export async function sync(options: SyncOptions = {}): Promise<SyncResult> {
   }
 
   if (!dryRun) {
-    await writeEnvironment(context, manifest, await relockSelections(lock, resolved));
+    // Sync's contract is "read intent, write derived state" (D17): the lock is
+    // rewritten (selection inventory refreshed, entries for packages no longer
+    // in titw.yaml pruned) but the hand-edited titw.yaml is never touched.
+    const nextLock = await relockSelections(lock, resolved);
+    if (options.locked === true && renderLock(nextLock) !== renderLock(lock)) {
+      throw new TitwError('E_LOCK_DRIFT', 'sync --locked: titw.lock would change', [
+        'run "titw sync" without --locked to update it',
+      ]);
+    }
+    await writeLock(context, nextLock);
   }
 
   return {
@@ -302,9 +314,15 @@ async function resolvePackages(
   return resolved;
 }
 
-/** Refresh the lock's selection and file inventory from what was just synced. */
+/**
+ * Refresh the lock's selection and file inventory from what was just synced.
+ *
+ * Entries for packages no longer in `titw.yaml` are dropped: the manifest is
+ * authoritative for membership, so an uninstalled package must not linger in
+ * the lock as an orphan.
+ */
 async function relockSelections(lock: Lock, resolved: readonly ResolvedPackage[]): Promise<Lock> {
-  const packages: Record<string, LockEntry> = { ...lock.packages };
+  const packages: Record<string, LockEntry> = {};
   for (const pkg of resolved) {
     packages[pkg.name] = {
       ...pkg.entry,
@@ -321,7 +339,7 @@ async function relockSelections(lock: Lock, resolved: readonly ResolvedPackage[]
  * A target reporting a path it did not write would leave that path out of the
  * receipt, and TITW only ever removes receipted paths.
  */
-async function validateStaged(stageDir: string, claimed: readonly string[]): Promise<void> {
+export async function validateStaged(stageDir: string, claimed: readonly string[]): Promise<void> {
   const onDisk = await walkFiles(stageDir);
   const claimedSet = new Set(claimed);
   const onDiskSet = new Set(onDisk);

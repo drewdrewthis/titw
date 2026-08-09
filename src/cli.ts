@@ -3,10 +3,12 @@ import { pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import { isTitwError } from './core/errors.js';
 import { files } from './commands/files.js';
-import { install } from './commands/install.js';
+import { gc } from './commands/gc.js';
+import { install, installFrozen } from './commands/install.js';
 import { outdated } from './commands/outdated.js';
 import { status } from './commands/status.js';
 import { rollback, sync } from './commands/sync.js';
+import { uninstall } from './commands/uninstall.js';
 
 interface GlobalFlags {
   env?: string;
@@ -36,19 +38,40 @@ export function buildProgram(): Command {
 
   program
     .command('install')
-    .argument('<source>', 'github:owner/repo, owner/repo, git+ssh://…, git+https://…, or path:…')
+    .argument('[source]', 'github:owner/repo, owner/repo, git+ssh://…, git+https://…, or path:…')
     .description('fetch, lock, and select a package into an environment')
     .option('--version <range>', 'semver range (default: newest release)')
     .option('--include <glob>', 'select only matching exports (repeatable)', collect, [])
     .option('--exclude <glob>', 'subtract matching paths (repeatable)', collect, [])
+    .option('--frozen', 'reproduce every locked package exactly; never resolves or rewrites state')
     .option('--env <name>', 'environment name', 'default')
     .option('--dry-run', 'resolve and report without writing state')
     .option('--json', 'machine-readable output')
-    .action(async (source: string, options: GlobalFlags & {
+    .action(async (source: string | undefined, options: GlobalFlags & {
       version?: string;
       include: string[];
       exclude: string[];
+      frozen?: boolean;
     }) => {
+      if (options.frozen === true) {
+        if (source !== undefined) {
+          throw new Error('install --frozen takes no source: it installs what titw.lock pins');
+        }
+        const frozen = await installFrozen({
+          ...(options.env === undefined ? {} : { environment: options.env }),
+        });
+        emit(options.json, frozen, () => [
+          `installed ${frozen.packages.length} locked package(s)`,
+          ...frozen.packages.map(
+            (pkg) =>
+              `  ${pkg.name}@${pkg.version}${pkg.commit === null ? '' : ` (${pkg.commit.slice(0, 7)})`}`,
+          ),
+        ]);
+        return;
+      }
+      if (source === undefined) {
+        throw new Error('install requires a <source> (or --frozen to install from titw.lock)');
+      }
       const result = await install({
         source,
         ...(options.version === undefined ? {} : { version: options.version }),
@@ -72,11 +95,13 @@ export function buildProgram(): Command {
     .command('sync')
     .description('stage, validate, and atomically activate the target projections')
     .option('--env <name>', 'environment name', 'default')
+    .option('--locked', 'fail instead of writing if titw.lock would change')
     .option('--dry-run', 'stage and validate without activating')
     .option('--json', 'machine-readable output')
-    .action(async (options: GlobalFlags) => {
+    .action(async (options: GlobalFlags & { locked?: boolean }) => {
       const result = await sync({
         ...(options.env === undefined ? {} : { environment: options.env }),
+        ...(options.locked === undefined ? {} : { locked: options.locked }),
         ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
       });
       emit(options.json, result, () => [
@@ -88,6 +113,46 @@ export function buildProgram(): Command {
           ...target.warnings.map((warning) => `    warning: ${warning}`),
           ...driftLines(target.drift),
         ]),
+      ]);
+    });
+
+  program
+    .command('uninstall')
+    .argument('<package>', 'installed package name')
+    .description('remove a package: manifest + lock entries, installed tree, and its projected files')
+    .option('--env <name>', 'environment name', 'default')
+    .option('--dry-run', 'report what would be removed without writing')
+    .option('--json', 'machine-readable output')
+    .action(async (pkg: string, options: GlobalFlags) => {
+      const result = await uninstall({
+        package: pkg,
+        ...(options.env === undefined ? {} : { environment: options.env }),
+        ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+      });
+      emit(options.json, result, () => [
+        `${result.dryRun ? 'would uninstall' : 'uninstalled'} ${result.package}@${result.version}`,
+        ...(result.removedInstalledDir === null ? [] : [`  removed  ${result.removedInstalledDir}`]),
+        ...(result.sync === null
+          ? []
+          : result.sync.targets.map((t) => `  target ${t.id}: ${t.paths} path(s) remain`)),
+        ...(result.dryRun ? [] : ['cache clone retained; run "titw gc" to reclaim it']),
+      ]);
+    });
+
+  program
+    .command('gc')
+    .description('delete installed trees and cache clones nothing in titw.lock references')
+    .option('--env <name>', 'environment name', 'default')
+    .option('--dry-run', 'report what would be deleted without deleting')
+    .option('--json', 'machine-readable output')
+    .action(async (options: GlobalFlags) => {
+      const result = await gc({
+        ...(options.env === undefined ? {} : { environment: options.env }),
+        ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+      });
+      emit(options.json, result, () => [
+        `${result.dryRun ? 'would delete' : 'deleted'} ${result.installed.length} installed tree(s), ${result.cache.length} cache clone(s)`,
+        ...[...result.installed, ...result.cache].map((p) => `  ${p}`),
       ]);
     });
 

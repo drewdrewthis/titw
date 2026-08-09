@@ -3,46 +3,42 @@ import {
   asStringList,
   parseFrontmatter,
   readPath,
+  renderInlineList,
 } from '../../core/frontmatter.js';
 
 /**
- * The seven record stores the `procedures` plugin scans, in its own order
- * (DECISIONS D5, measured against plugin v0.2.3).
+ * Record kinds the plugin's own stores use (DECISIONS D5, plugin v0.2.3).
+ * Under D23 the projection is verbatim per package — kind never decides
+ * placement — but a known kind still gates compat decoration.
  */
-export const RECORD_STORES = {
-  'failure-mode': 'references/failure-modes',
-  decision: 'references/decisions',
-  solution: 'references/solutions',
-  procedure: 'references/procedures',
-  research: 'references/research',
-  plan: 'plans',
-  principle: 'references/principles',
-} as const;
+export const RECORD_KINDS = [
+  'failure-mode',
+  'decision',
+  'solution',
+  'procedure',
+  'research',
+  'plan',
+  'principle',
+] as const;
 
-/** A record kind TITW can project. */
-export type RecordKind = keyof typeof RECORD_STORES;
+/** A record kind TITW recognizes. */
+export type RecordKind = (typeof RECORD_KINDS)[number];
 
-const STORE_BASENAMES = new Set(
-  Object.values(RECORD_STORES).map((store) => store.slice(store.lastIndexOf('/') + 1)),
-);
+const KIND_SET: ReadonlySet<string> = new Set(RECORD_KINDS);
 
 /** Normalize an OKF `type:` or six-key `kind:` value to a {@link RecordKind}. */
 export function normalizeKind(value: string | null): RecordKind | null {
   if (value === null) return null;
   const slug = value.trim().toLowerCase().replace(/[\s_]+/g, '-');
-  return slug in RECORD_STORES ? (slug as RecordKind) : null;
-}
-
-/** Store directory for a kind, or `null` when the kind is not a record kind. */
-export function storeForKind(value: string | null): string | null {
-  const kind = normalizeKind(value);
-  return kind === null ? null : RECORD_STORES[kind];
+  return KIND_SET.has(slug) ? (slug as RecordKind) : null;
 }
 
 /** What the projection needs to know about one Markdown file. */
 export interface RecordInfo {
-  /** Resolved record kind, or `null` when the file is not a projectable record. */
+  /** Resolved record kind, or `null` when the file is not a recognized record. */
   readonly kind: RecordKind | null;
+  /** Declared kind value that resolved to no known kind; `null` when absent or known. */
+  readonly unknownKind: string | null;
   /** Stable record identity: `titw.id`, else the six-key `id`. */
   readonly id: string | null;
   /** Frontmatter lines to insert into the projected copy; empty when none are needed. */
@@ -57,15 +53,13 @@ export interface RecordInfo {
  * `keywords: [a, b]` list; an OKF-native record spells those `titw.id`,
  * `type:`, and `tags:`. Compat keys are computed here and inserted into the
  * generated copy only — package bytes never change (DECISIONS D5).
- *
- * Only records are decorated: a document with no projectable kind is copied
- * verbatim.
  */
 export function classifyRecord(text: string): RecordInfo {
   const { data } = parseFrontmatter(text);
   const declaredKind = asString(data['kind']);
   const declaredType = asString(data['type']);
   const kind = normalizeKind(declaredKind) ?? normalizeKind(declaredType);
+  const unknownKind = kind !== null ? null : (declaredKind ?? declaredType);
 
   const declaredId = asString(data['id']);
   const namespacedId = asString(readPath(data, 'titw.id'));
@@ -77,35 +71,37 @@ export function classifyRecord(text: string): RecordInfo {
     if (normalizeKind(declaredKind) === null) compat.push(`kind: ${kind}`);
     if (data['keywords'] === undefined) {
       const tags = asStringList(data['tags']);
-      if (tags.length > 0) compat.push(`keywords: [${tags.join(', ')}]`);
+      if (tags.length > 0) compat.push(`keywords: ${renderInlineList(tags)}`);
     }
   }
 
-  return { kind, id, compat };
+  return { kind, unknownKind, id, compat };
 }
 
 /**
- * Place a source path inside its store, preserving the subpath that follows
- * the store's own directory.
+ * Normalize a Markdown document so the plugin's scanner can read it:
+ * strip a BOM, fold CRLF to LF, and rewrite a block-style `keywords:` list
+ * to the inline form (the only syntax the corpus matcher tokenizes).
  *
- * `knowledge/procedures/deploy/PROCEDURE.md` (kind `procedure`) projects to
- * `references/procedures/deploy/PROCEDURE.md`. A record filed outside a
- * conventionally-named directory keeps its basename only, since there is no
- * subpath to preserve.
+ * Applies to the projected copy only — package bytes never change.
  */
-export function projectionPath(store: string, sourcePath: string): string {
-  const segments = sourcePath.split('/');
-  const filename = segments[segments.length - 1] ?? sourcePath;
-  const storeName = store.slice(store.lastIndexOf('/') + 1);
+export function normalizeRecordText(text: string): string {
+  let out = text;
+  if (out.charCodeAt(0) === 0xfeff) out = out.slice(1);
+  out = out.replace(/\r\n/g, '\n');
 
-  for (let i = segments.length - 2; i >= 0; i -= 1) {
-    if (segments[i] === storeName) return [store, ...segments.slice(i + 1)].join('/');
+  const fm = parseFrontmatter(out);
+  if (!fm.present) return out;
+  const keywords = asStringList(fm.data['keywords']);
+  const blockList = /^(\s*)keywords:[ \t]*\n(?:\1[ \t]+-[ \t].*\n?)+/m;
+  if (keywords.length > 0 && blockList.test(fm.block)) {
+    const header = out.slice(0, fm.bodyOffset);
+    const body = out.slice(fm.bodyOffset);
+    out =
+      header.replace(
+        blockList,
+        (_m, indent: string) => `${indent}keywords: ${renderInlineList(keywords)}\n`,
+      ) + body;
   }
-  for (let i = segments.length - 2; i >= 0; i -= 1) {
-    const segment = segments[i];
-    if (segment !== undefined && STORE_BASENAMES.has(segment)) {
-      return [store, ...segments.slice(i + 1)].join('/');
-    }
-  }
-  return `${store}/${filename}`;
+  return out;
 }

@@ -20,20 +20,20 @@ import {
 
 const VM_ONLY = 'knowledge/procedures/vm-only/**';
 
-const CORPUS_PATHS = [
-  'corpus/plans/ship-v1.md',
-  'corpus/references/decisions/2026-08-08-use-yaml.md',
-  'corpus/references/failure-modes/stale-projection.md',
-  'corpus/references/principles/added-in-1-1.md',
-  'corpus/references/principles/simple-first.md',
-  'corpus/references/procedures/deploy/PROCEDURE.md',
-  'corpus/references/research/okf-adoption.md',
-  'corpus/references/solutions/2026-08-08-tag-resolution.md',
-];
+/** Verbatim per-package projection root (D23). */
+const PKG = 'corpus/@titw+fixture-way';
 
-const NON_RECORD_PATHS = [
-  'files/@titw+fixture-way/README.md',
-  'files/@titw+fixture-way/scripts/verify.sh',
+const CORPUS_PATHS = [
+  `${PKG}/README.md`,
+  `${PKG}/knowledge/decisions/2026-08-08-use-yaml.md`,
+  `${PKG}/knowledge/failure-modes/stale-projection.md`,
+  `${PKG}/knowledge/principles/added-in-1-1.md`,
+  `${PKG}/knowledge/principles/simple-first.md`,
+  `${PKG}/knowledge/procedures/deploy/PROCEDURE.md`,
+  `${PKG}/knowledge/research/okf-adoption.md`,
+  `${PKG}/knowledge/solutions/2026-08-08-tag-resolution.md`,
+  `${PKG}/plans/ship-v1.md`,
+  `${PKG}/scripts/verify.sh`,
 ];
 
 describe('install -> sync -> Claude corpus projection', () => {
@@ -84,23 +84,20 @@ describe('install -> sync -> Claude corpus projection', () => {
     );
   });
 
-  it('makes every installed file read-only', async () => {
-    const installed = path.join(home, 'packages/installed/@titw+fixture-way/1.1.0');
-    for (const rel of await walkFiles(installed)) {
-      const stat = await fs.stat(path.join(installed, ...rel.split('/')));
-      expect(stat.mode & 0o222).toBe(0);
-    }
-    if (process.getuid?.() !== 0) {
-      await expect(
-        fs.writeFile(path.join(installed, 'README.md'), 'tampered'),
-      ).rejects.toMatchObject({ code: 'EACCES' });
-    }
+  it('preserves source file modes: a packaged script survives install+sync executable (D22)', async () => {
+    const installed = path.join(
+      home,
+      'packages/installed/@titw+fixture-way/1.1.0/scripts/verify.sh',
+    );
+    const projected = path.join(active, ...`${PKG}/scripts/verify.sh`.split('/'));
+    expect((await fs.stat(installed)).mode & 0o111).not.toBe(0);
+    expect((await fs.stat(projected)).mode & 0o111).not.toBe(0);
   });
 
-  it('projects each record into its store and omits the excluded path', async () => {
+  it('projects every selected file verbatim under the package dir, omitting the excluded path', async () => {
     const present = await walkFiles(active);
-    expect(present).toEqual([...CORPUS_PATHS, 'catalog.json', ...NON_RECORD_PATHS].sort());
-    expect(present).not.toContain('corpus/references/procedures/vm-only/PROCEDURE.md');
+    expect(present).toEqual([...CORPUS_PATHS, 'catalog.json'].sort());
+    expect(present).not.toContain(`${PKG}/knowledge/procedures/vm-only/PROCEDURE.md`);
   });
 
   it('copies six-key record bytes identically into the projection', async () => {
@@ -108,14 +105,14 @@ describe('install -> sync -> Claude corpus projection', () => {
       home,
       'packages/installed/@titw+fixture-way/1.1.0/knowledge/procedures/deploy/PROCEDURE.md',
     );
-    const projected = path.join(active, 'corpus/references/procedures/deploy/PROCEDURE.md');
+    const projected = path.join(active, ...`${PKG}/knowledge/procedures/deploy/PROCEDURE.md`.split('/'));
     expect(await hashFile(projected)).toBe(await hashFile(source));
   });
 
   it('decorates only the projected copy of an OKF record with compat keys', async () => {
     const rel = 'knowledge/research/okf-adoption.md';
     const source = path.join(home, 'packages/installed/@titw+fixture-way/1.1.0', rel);
-    const projected = path.join(active, 'corpus/references/research/okf-adoption.md');
+    const projected = path.join(active, ...`${PKG}/knowledge/research/okf-adoption.md`.split('/'));
 
     const sourceText = await fs.readFile(source, 'utf8');
     const projectedText = await fs.readFile(projected, 'utf8');
@@ -143,11 +140,11 @@ describe('install -> sync -> Claude corpus projection', () => {
     expect(entry?.version).toBe('1.1.0');
     expect(entry?.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(entry?.sourcePath).toBe('knowledge/procedures/deploy/PROCEDURE.md');
-    expect(entry?.targetPath).toBe('corpus/references/procedures/deploy/PROCEDURE.md');
+    expect(entry?.targetPath).toBe(`${PKG}/knowledge/procedures/deploy/PROCEDURE.md`);
     expect(entry?.editable).toBe(false);
 
     expect(catalog['res.okf-adoption']?.sourcePath).toBe('knowledge/research/okf-adoption.md');
-    expect(catalog['files/@titw+fixture-way/README.md']?.sourcePath).toBe('README.md');
+    expect(catalog[`${PKG}/README.md`]?.sourcePath).toBe('README.md');
     expect(Object.keys(catalog)).not.toContain('proc.vm-only.fixture');
   });
 
@@ -174,7 +171,7 @@ describe('install -> sync -> Claude corpus projection', () => {
     const deploy = listed.files.find(
       (file) => file.path === 'knowledge/procedures/deploy/PROCEDURE.md',
     );
-    expect(deploy?.targetPath).toBe('corpus/references/procedures/deploy/PROCEDURE.md');
+    expect(deploy?.targetPath).toBe(`${PKG}/knowledge/procedures/deploy/PROCEDURE.md`);
     expect(deploy?.sha256).toMatch(/^sha256:/);
   });
 
@@ -214,8 +211,8 @@ describe('install -> sync -> Claude corpus projection', () => {
     const narrowed = await walkFiles(active);
     expect(narrowed).toEqual([
       'catalog.json',
-      'corpus/references/principles/added-in-1-1.md',
-      'corpus/references/principles/simple-first.md',
+      `${PKG}/knowledge/principles/added-in-1-1.md`,
+      `${PKG}/knowledge/principles/simple-first.md`,
     ]);
 
     const rolledBack = await rollback({ home });
@@ -269,7 +266,7 @@ describe('selection and dry runs', () => {
     ]);
     expect(await walkFiles(result.targets[0]?.root ?? '')).toEqual([
       'catalog.json',
-      'corpus/references/principles/simple-first.md',
+      `${PKG}/knowledge/principles/simple-first.md`,
     ]);
   }, 30_000);
 
