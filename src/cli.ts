@@ -6,6 +6,7 @@ import { files } from './commands/files.js';
 import { gc } from './commands/gc.js';
 import { install, installFrozen } from './commands/install.js';
 import { outdated } from './commands/outdated.js';
+import { update } from './commands/update.js';
 import { status } from './commands/status.js';
 import { rollback, sync } from './commands/sync.js';
 import { uninstall } from './commands/uninstall.js';
@@ -222,6 +223,32 @@ export function buildProgram(): Command {
             `${row.upToDate ? '' : '  (update available)'}` +
             `${row.error === undefined ? '' : `  [${row.error}]`}`,
         ),
+      ]);
+    });
+
+  program
+    .command('update')
+    .argument('[package]', 'installed package name (default: every package)')
+    .description('re-resolve locked package(s) to the newest version satisfying their range')
+    .option('--env <name>', 'environment name', 'default')
+    .option('--dry-run', 'resolve and report without writing state')
+    .option('--json', 'machine-readable output')
+    .action(async (pkg: string | undefined, options: GlobalFlags) => {
+      const result = await update({
+        ...(pkg === undefined ? {} : { package: pkg }),
+        ...(options.env === undefined ? {} : { environment: options.env }),
+        ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+      });
+      emit(options.json, result, () => [
+        ...result.packages.map(
+          (row) =>
+            `${row.name}  ${row.from} -> ${row.to ?? '?'}` +
+            `${row.updated ? '' : row.error === undefined ? '  (up to date)' : ''}` +
+            `${row.error === undefined ? '' : `  [${row.error}]`}`,
+        ),
+        ...(result.dryRun || !result.packages.some((row) => row.updated)
+          ? []
+          : ['run "titw sync" to materialize the projection']),
       ]);
     });
 

@@ -6,6 +6,7 @@ import { install } from '../src/commands/install.js';
 import { outdated } from '../src/commands/outdated.js';
 import { status } from '../src/commands/status.js';
 import { rollback, sync } from '../src/commands/sync.js';
+import { update } from '../src/commands/update.js';
 import { hashFile } from '../src/core/hash.js';
 import { loadLock } from '../src/core/manifest.js';
 import { walkFiles } from '../src/core/fsx.js';
@@ -288,6 +289,43 @@ describe('selection and dry runs', () => {
     });
     await publishFixtureVersion(repo, '1.1.0');
   }, 30_000);
+
+  it('update re-resolves the recorded range, refuses downgrades, reports no-ops', async () => {
+    // Re-install without --version so the recorded range floats (^1.1.0, D11).
+    await install({ home, source: repo.source, include: ['knowledge/principles/simple-first.md'] });
+
+    // Up to date: nothing to move.
+    const noop = await update({ home });
+    expect(noop.packages).toEqual([
+      { name: FIXTURE_PACKAGE, from: '1.1.0', to: '1.1.0', updated: false },
+    ]);
+
+    // Published version moved forward within the recorded ^1.1.0 range.
+    await publishFixtureVersion(repo, '1.2.0');
+    const moved = await update({ home });
+    expect(moved.packages).toEqual([
+      { name: FIXTURE_PACKAGE, from: '1.1.0', to: '1.2.0', updated: true },
+    ]);
+    const lock = await loadLock(path.join(home, 'environments/default/titw.lock'));
+    expect(lock.packages[FIXTURE_PACKAGE]?.version).toBe('1.2.0');
+    expect(lock.packages[FIXTURE_PACKAGE]?.selection).toEqual([
+      'knowledge/principles/simple-first.md',
+    ]);
+
+    // A regressed remote surfaces as a per-row error, not an aborted run.
+    await publishFixtureVersion(repo, '0.9.0');
+    const refused = await update({ home });
+    expect(refused.packages[0]).toMatchObject({ updated: false, to: null });
+    expect(refused.packages[0]?.error).toBeDefined();
+
+    // Unknown package name errors up front.
+    await expect(update({ home, package: '@titw/nope' })).rejects.toMatchObject({
+      code: 'E_NOT_FOUND',
+    });
+
+    // Restore the fixture for the tests that follow.
+    await publishFixtureVersion(repo, '1.1.0');
+  }, 60_000);
 
   it('leaves no state behind on a dry-run install', async () => {
     const dryHome = path.join(root, 'dry-home');
