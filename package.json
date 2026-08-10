@@ -4,6 +4,14 @@
   "description": "TITW — a GitHub-backed package manager for agent knowledge and behavior files",
   "license": "MIT",
   "repository": "github:drewdrewthis/titw",
+  "keywords": [
+    "package-manager",
+    "agent",
+    "knowledge",
+    "claude",
+    "procedures",
+    "cli"
+  ],
   "type": "module",
   "bin": {
     "titw": "./dist/cli.js"
@@ -16,6 +24,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run build && npm test",
     "dev": "tsx src/cli.ts",
     "test": "vitest run",
     "test:watch": "vitest",
