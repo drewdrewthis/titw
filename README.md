@@ -24,6 +24,13 @@ runs the real installed `query-records.sh` against a synced projection).
 Authoring commands (`init`, `check`, `lint`, `build`, `publish`), dependency resolution, and
 active components (skills/hooks) are not implemented yet.
 
+## Install
+
+```bash
+npx -y titw --help        # no install needed
+npm install -g titw       # or install the CLI globally
+```
+
 ## Working today
 
 ```bash
