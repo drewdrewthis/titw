@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import { Command } from 'commander';
 import { isTitwError } from './core/errors.js';
@@ -298,7 +299,26 @@ export async function main(argv: readonly string[]): Promise<number> {
   }
 }
 
+/**
+ * True when this module is the script the process was started with.
+ *
+ * `entry` must be resolved through symlinks first: npm installs `bin` as a link
+ * (`node_modules/.bin/titw -> ../titw/dist/cli.js`) and Node then reports the link
+ * path in `process.argv[1]` but the realpath in `import.meta.url`. Comparing them
+ * unresolved never matches, so the installed CLI would exit 0 having done nothing.
+ */
+function isEntrypoint(entry: string): boolean {
+  let resolved = entry;
+  try {
+    resolved = realpathSync(entry);
+  } catch {
+    // argv[1] need not name a real file (`node --eval`, a script deleted mid-run):
+    // an unresolvable path is simply not this module, so compare it as given.
+  }
+  return import.meta.url === pathToFileURL(resolved).href;
+}
+
 const entry = process.argv[1];
-if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
+if (entry !== undefined && isEntrypoint(entry)) {
   process.exitCode = await main(process.argv);
 }
