@@ -184,3 +184,39 @@ rename; one ownership boundary for receipts, drift, uninstall, and gitignore. Co
 plugin's `STORES` list gains one entry (touching `stores.sh`, `lint-frontmatter.sh`
 scope, and the store-list drift test) — a policy call on whether codex lint applies to
 vendored records ships with that change.
+
+## D24 — `propose` selection is file-granular, and the diff base is the upstream commit the clone was installed from
+
+`titw propose` diffs the local clone against the commit it's based on (from the lock), lists
+the files that differ, and lets the user pick which to send. Selected files are committed
+onto a fresh branch off upstream main, pushed, opened as a PR, and the branch is deleted —
+plumbing that never becomes durable local topology. Files, not commits, are the unit: a
+local tree with forty commits can still propose exactly three records, and cherry-picking
+never enters the picture because records already live one-per-file. Diffing against
+upstream tip instead of the install commit was rejected — that would list files upstream
+itself changed and the user didn't touch, which aren't the user's to propose. Auto-opening a
+PR for any local change was also rejected: most local edits are personal, never meant to
+travel upstream, and auto-PR erases the mine/for-everyone distinction while spamming
+upstream with noise.
+
+## D25 — Sync resolves conflicts to the local version unconditionally, and reports what it shadowed
+
+A conflicting file on rebase keeps the user's version, full stop — no markers, no prompt, no
+blocked sync. A corpus consumer isn't necessarily a git user, and a sync that can stall mid-
+session breaks a working config. The known cost: a small local edit becomes a silent
+permanent pin on that file, so the user stops receiving upstream updates to it without
+noticing. Mitigated, not solved, by a non-blocking notice at the end of sync naming every
+shadowed file and flagging which of them upstream has since moved on without. Sync stays
+fast and silent; staleness stops being invisible.
+
+## D26 — `propose` is also the reconciliation surface for files upstream changed too
+
+The propose list sorts differences into three buckets: changed-locally-only (the common
+case, lists clean), changed-upstream-only (already absorbed by sync, never listed), and
+changed-both (flagged — this is the one that needs a decision). A changed-both file can't be
+proposed blind: the user must view the shadowed upstream version first, or a proposal built
+from a stale local copy would silently revert upstream's work on merge. Each flagged file
+gets three actions — propose, keep local (sticky, so the same personal divergence doesn't
+re-prompt every run), or discard local and take upstream. This makes `propose` the one place
+that answers "how do I differ from upstream, and what do I want to do about it," and it
+happens to self-clear the case where a maintainer edited a contribution during PR review.
