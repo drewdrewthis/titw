@@ -57,8 +57,12 @@ describe('titw CLI', () => {
 
     const status = await cli(['status', '--json']);
     expect(status.code).toBe(0);
-    const statusPayload = JSON.parse(status.stdout) as { packages: Array<{ name: string }> };
+    const statusPayload = JSON.parse(status.stdout) as {
+      packages: Array<{ name: string }>;
+      targets: Array<{ pinned: string[] }>;
+    };
     expect(statusPayload.packages[0]?.name).toBe('@titw/fixture-way');
+    expect(statusPayload.targets[0]?.pinned).toEqual([]);
   }, 60_000);
 
   it('exits 1 with the error on stderr for a failing command', async () => {
@@ -87,6 +91,14 @@ describe('titw CLI', () => {
     };
     expect(payload.targets[0]?.kept).toEqual([]);
     expect(payload.targets[0]?.proposed).toBeNull();
+  });
+
+  it('sync --clear-pins is accepted and reports kept/pinned in --json', async () => {
+    const result = await cli(['sync', '--clear-pins', '--json']);
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout) as { targets: Array<{ kept: string[]; pinned: string[] }> };
+    expect(payload.targets[0]?.kept).toEqual([]);
+    expect(payload.targets[0]?.pinned).toEqual([]);
   });
 
   it('install --frozen --dry-run reports without writing state', async () => {

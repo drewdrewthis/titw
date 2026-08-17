@@ -107,13 +107,15 @@ export function buildProgram(): Command {
       '--no-interactive',
       'skip drift prompts and replace every locally-edited file (default off a TTY)',
     )
+    .option('--clear-pins', 'drop every recorded pin so the fresh build reclaims previously-kept files')
     .option('--json', 'machine-readable output')
-    .action(async (options: GlobalFlags & { locked?: boolean; interactive: boolean }) => {
+    .action(async (options: GlobalFlags & { locked?: boolean; interactive: boolean; clearPins?: boolean }) => {
       const result = await sync({
         ...(options.env === undefined ? {} : { environment: options.env }),
         ...(options.locked === undefined ? {} : { locked: options.locked }),
         ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
         ...(options.interactive === false ? { interactive: false } : {}),
+        ...(options.clearPins === true ? { clearPins: true } : {}),
       });
       emit(options.json, result, () => [
         `${result.dryRun ? 'would sync' : 'synced'} environment "${result.environment}"` +
@@ -186,11 +188,14 @@ export function buildProgram(): Command {
             `  ${pkg.name}@${pkg.version}  ${pkg.selected} selected  ${pkg.source}` +
             `${pkg.installed ? '' : '  (not installed)'}`,
         ),
-        ...result.targets.map(
-          (target) =>
-            `  target ${target.id}: ${target.active ? target.generation ?? 'active' : 'never synced'}` +
-            ` (${target.paths} path(s))\n    corpus ${target.corpusRoot}`,
-        ),
+        ...result.targets.flatMap((target) => [
+          `  target ${target.id}: ${target.active ? target.generation ?? 'active' : 'never synced'}` +
+            ` (${target.paths} path(s))`,
+          `    corpus ${target.corpusRoot}`,
+          ...(target.pinned.length > 0
+            ? [`    pinned ${target.pinned.length} file(s): ${target.pinned.join(', ')}`]
+            : []),
+        ]),
       ]);
     });
 
@@ -292,11 +297,15 @@ function driftLines(drift: { missing: string[]; modified: string[]; unowned: str
 
 function resolutionLines(target: {
   kept: string[];
+  pinned: string[];
   proposed: { paths: string[]; file: string } | null;
 }): string[] {
   const lines: string[] = [];
   if (target.kept.length > 0) {
     lines.push(`    kept ${target.kept.length} locally-edited file(s): ${target.kept.join(', ')}`);
+  }
+  if (target.pinned.length > 0) {
+    lines.push(`    honored ${target.pinned.length} pinned file(s): ${target.pinned.join(', ')}`);
   }
   if (target.proposed !== null) {
     lines.push(

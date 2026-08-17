@@ -25,10 +25,13 @@ import {
   currentReceiptFile,
   detectDrift,
   readCurrentReceipt,
+  readPins,
   recordProposals,
   swapReceipts,
+  writePins,
   writeReceipt,
   type Drift,
+  type Pin,
   type ReceiptPackage,
 } from '../materialize/receipt.js';
 import { CATALOG_FILENAME } from '../targets/claude/index.js';
@@ -65,6 +68,13 @@ export interface SyncOptions extends CommandOptions {
   readonly stdin?: PromptStdin | undefined;
   /** Stream the drift prompt writes to; default `process.stdout`. Test seam. */
   readonly stdout?: NodeJS.WritableStream | undefined;
+  /**
+   * Drop every recorded pin for every synced target before resolving drift,
+   * so a previously-kept path is no longer protected and this sync's fresh
+   * build is free to reclaim it. The escape hatch out of a `keep`/`propose`
+   * decision (CLI: `--clear-pins`).
+   */
+  readonly clearPins?: boolean | undefined;
 }
 
 export interface SyncTargetResult {
@@ -79,6 +89,13 @@ export interface SyncTargetResult {
   readonly drift: Drift | null;
   /** Locally-modified paths whose edit was kept (replace declined) this sync. */
   readonly kept: string[];
+  /**
+   * Previously-kept paths whose pin was silently re-applied this sync: no
+   * further local edit, and upstream's build for that path is unchanged
+   * since the pin was made. Disjoint from `kept`, which is only paths
+   * decided (or re-decided) *this* sync — see `resolveModifiedDrift`.
+   */
+  readonly pinned: string[];
   /** Where kept paths were recorded for upstream contribution, when any were proposed. */
   readonly proposed: { readonly paths: string[]; readonly file: string } | null;
 }
@@ -127,12 +144,23 @@ export async function sync(options: SyncOptions = {}): Promise<SyncResult> {
   const stdin = options.stdin ?? process.stdin;
   const io: DriftPromptIO = { input: stdin, output: options.stdout ?? process.stdout };
   const prompt = options.interactive !== false && stdin.isTTY === true;
+  const clearPins = options.clearPins === true;
   const targets: SyncTargetResult[] = [];
 
   try {
     for (const id of enabledTargets(manifest)) {
       targets.push(
-        await syncTarget({ id, generation, stageRoot, dryRun, context, packages: resolved, prompt, io }),
+        await syncTarget({
+          id,
+          generation,
+          stageRoot,
+          dryRun,
+          context,
+          packages: resolved,
+          prompt,
+          io,
+          clearPins,
+        }),
       );
     }
   } finally {
@@ -176,8 +204,9 @@ async function syncTarget(args: {
   packages: readonly ResolvedPackage[];
   prompt: boolean;
   io: DriftPromptIO;
+  clearPins: boolean;
 }): Promise<SyncTargetResult> {
-  const { id, generation, stageRoot, dryRun, context, packages, prompt, io } = args;
+  const { id, generation, stageRoot, dryRun, context, packages, prompt, io, clearPins } = args;
   const layout = targetLayout(context.layout, id);
   await pruneStaging(layout);
 
@@ -202,9 +231,12 @@ async function syncTarget(args: {
     drift,
     dryRun,
     prompt,
+    clearPins,
     io,
     activeDir: layout.active,
     stageDir,
+    receiptsDir: context.env.receiptsDir,
+    target: id,
   });
 
   const receiptPackages: ReceiptPackage[] = packages.map((pkg) => ({
@@ -232,6 +264,7 @@ async function syncTarget(args: {
       warnings: built.warnings,
       drift,
       kept: resolution.kept,
+      pinned: resolution.pinned,
       proposed: null,
     };
   }
@@ -256,57 +289,139 @@ async function syncTarget(args: {
     warnings: built.warnings,
     drift,
     kept: resolution.kept,
+    pinned: resolution.pinned,
     proposed,
   };
 }
 
 /**
- * Resolve each locally-modified path against the user's choice, copying kept
- * edits from the active projection onto the freshly staged one so activation
- * does not clobber them.
+ * Resolve every path that needs a decision before the stage is activated:
+ * paths freshly flagged as drift, plus any previously-pinned path whose
+ * upstream baseline has moved since the pin was made.
  *
- * A dry run never prompts (nothing activates, so a prompt would have no
- * effect and could only hang a scripted `--dry-run`); a non-interactive run
- * (no TTY, or `interactive: false`) replaces every path silently — today's
- * behavior. Once a path is kept, its receipt entry is the kept (local) hash
- * (see `buildReceipt`'s call site), so it is no longer reported as drift —
- * the tradeoff is that a *later* sync with no further local edit will then
- * find no drift to resolve and silently reactivate the fresh upstream build,
- * since "no drift" and "no local divergence" are indistinguishable once the
- * receipt has been updated to match. Recording the kept hash is still the
- * only coherent choice: the receipt is hashed from whatever bytes are
- * actually in the stage, so deliberately writing a different (stale) hash
- * would desync the receipt from the tree it describes.
+ * Choosing `keep` or `propose` writes a receipt entry for the kept (local)
+ * hash, so the very next `detectDrift` no longer sees that path as modified
+ * — "no drift" and "no local divergence" become indistinguishable once the
+ * receipt matches the active file. Left there, that path would fall back
+ * into the ordinary build-and-activate path with nothing to stop the fresh
+ * upstream build from silently overwriting it — the user's answer would
+ * expire after exactly one sync. A pin is what makes `keep` durable: a
+ * `{path, hash, upstreamHash}` record (`materialize/receipt.ts`) checked on
+ * every later sync independently of `drift.modified`.
+ *
+ * A pin is honored (the active file copied back over the stage, silently,
+ * no prompt) when both hold: the active file still matches `hash` (no
+ * further local edit — if it doesn't, the path is back in `drift.modified`
+ * and this function's ordinary prompt-or-replace handling owns it instead),
+ * and this sync's fresh build for that path still matches `upstreamHash`
+ * (upstream hasn't changed since the pin was made). Pins are honored even
+ * non-interactively: a pin is a decision the user already made, not a
+ * prompt being skipped.
+ *
+ * A pin whose fresh-build hash no longer matches `upstreamHash` is stale:
+ * upstream moved since the user chose to keep this file, so silently
+ * re-honoring it would mask that change forever — exactly the "permanent
+ * blindfold" a pin must not become. Interactively, it is folded into this
+ * sync's prompt set (alongside genuinely new drift) with a note pointing
+ * out why it's being asked again. Non-interactively there is no one to ask,
+ * so it falls back to the same default as any other non-interactive path —
+ * replace — and the stale pin is dropped rather than left to be flagged as
+ * stale forever after.
+ *
+ * A dry run touches no pin state at all: nothing it decides survives the
+ * caller's `rmTreeForce(stageRoot)`, so reading or writing pins would only
+ * be discarded work — matching why it never prompts either.
  */
 async function resolveModifiedDrift(args: {
   drift: Drift | null;
   dryRun: boolean;
   prompt: boolean;
+  clearPins: boolean;
   io: DriftPromptIO;
   activeDir: string;
   stageDir: string;
-}): Promise<{ kept: string[]; proposed: string[] }> {
+  receiptsDir: string;
+  target: string;
+}): Promise<{ kept: string[]; pinned: string[]; proposed: string[] }> {
+  if (args.dryRun) return { kept: [], pinned: [], proposed: [] };
+
   const modified = args.drift?.modified ?? [];
-  if (args.dryRun || !args.prompt || modified.length === 0) {
-    return { kept: [], proposed: [] };
+  const modifiedSet = new Set(modified);
+  const existingPins = await readPins(args.receiptsDir, args.target);
+  const hadPins = existingPins.pins.length > 0;
+  const candidates = args.clearPins ? [] : existingPins.pins;
+
+  // Classify every recorded pin: still-valid ones are honored immediately
+  // (regardless of interactivity); stale-by-upstream ones join this sync's
+  // prompt set below. A pin whose path is back in `modified` was edited
+  // again locally since the pin, so it is left out of `nextPins` here and
+  // handled entirely by the ordinary resolution loop below instead.
+  const pinned: string[] = [];
+  const staleByUpstream: string[] = [];
+  const nextPins = new Map<string, Pin>();
+  for (const pin of candidates) {
+    if (modifiedSet.has(pin.path)) continue;
+    const activeAbs = path.join(args.activeDir, ...pin.path.split('/'));
+    const stageAbs = path.join(args.stageDir, ...pin.path.split('/'));
+    if (!(await pathExists(activeAbs)) || !(await pathExists(stageAbs))) {
+      nextPins.set(pin.path, pin); // path not part of this sync either way; carry the pin forward as-is
+      continue;
+    }
+    if ((await hashFile(activeAbs)) !== pin.hash) {
+      nextPins.set(pin.path, pin); // shouldn't happen (detectDrift would have flagged it); don't fight it
+      continue;
+    }
+    if ((await hashFile(stageAbs)) === pin.upstreamHash) {
+      await copyFile(activeAbs, stageAbs);
+      pinned.push(pin.path);
+      nextPins.set(pin.path, pin);
+    } else {
+      staleByUpstream.push(pin.path); // resolved below; re-pinned or dropped depending on this sync's choice
+    }
   }
 
-  const choices = await promptDriftChoices(modified, args.io);
+  const toResolve = [...modified, ...staleByUpstream];
+  if (toResolve.length === 0 || !args.prompt) {
+    await persistPins(args, hadPins, nextPins);
+    return { kept: [], pinned, proposed: [] };
+  }
+
+  if (staleByUpstream.length > 0) {
+    args.io.output.write(
+      `note: upstream changed for ${staleByUpstream.length} pinned file(s) since you kept them` +
+        ` — asking again: ${staleByUpstream.join(', ')}\n`,
+    );
+  }
+
+  const choices = await promptDriftChoices(toResolve, args.io);
   const kept: string[] = [];
   const proposed: string[] = [];
 
-  for (const rel of modified) {
+  for (const rel of toResolve) {
     const choice = choices.get(rel) ?? 'replace';
-    if (choice === 'replace') continue;
-    await copyFile(
-      path.join(args.activeDir, ...rel.split('/')),
-      path.join(args.stageDir, ...rel.split('/')),
-    );
+    if (choice === 'replace') continue; // left out of nextPins: nothing local left to protect
+
+    const activeAbs = path.join(args.activeDir, ...rel.split('/'));
+    const stageAbs = path.join(args.stageDir, ...rel.split('/'));
+    const upstreamHash = await hashFile(stageAbs); // read before the copy below overwrites it
+    await copyFile(activeAbs, stageAbs);
     kept.push(rel);
     if (choice === 'propose') proposed.push(rel);
+    nextPins.set(rel, { path: rel, hash: await hashFile(activeAbs), upstreamHash });
   }
 
-  return { kept, proposed };
+  await persistPins(args, hadPins, nextPins);
+  return { kept, pinned, proposed };
+}
+
+/** Write a target's next pin state, but only touch disk when there is something to record or clear. */
+async function persistPins(
+  args: { receiptsDir: string; target: string },
+  hadPins: boolean,
+  nextPins: ReadonlyMap<string, Pin>,
+): Promise<void> {
+  if (nextPins.size === 0 && !hadPins) return; // never create pins.json for a target that has never used it
+  await writePins(args.receiptsDir, args.target, [...nextPins.values()]);
 }
 
 /**
@@ -337,6 +452,7 @@ export async function rollback(
     warnings: [],
     drift: null,
     kept: [],
+    pinned: [],
     proposed: null,
   };
 }

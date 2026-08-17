@@ -2,7 +2,7 @@ import path from 'node:path';
 import { comparePaths, pathExists } from '../core/fsx.js';
 import { PACKAGE_MANIFEST_FILENAME } from '../core/manifest.js';
 import { installedPackageDir, targetLayout } from '../materialize/layout.js';
-import { readCurrentReceipt } from '../materialize/receipt.js';
+import { readCurrentReceipt, readPins } from '../materialize/receipt.js';
 import { contextFor, enabledTargets, readEnvironment, type CommandOptions } from './context.js';
 
 export interface StatusPackage {
@@ -24,6 +24,8 @@ export interface StatusTarget {
   readonly generation: string | null;
   readonly paths: number;
   readonly corpusRoot: string;
+  /** Locally-kept paths currently protected from being overwritten by a sync. */
+  readonly pinned: string[];
 }
 
 export interface StatusResult {
@@ -64,6 +66,7 @@ export async function status(options: CommandOptions = {}): Promise<StatusResult
   for (const id of enabledTargets(manifest)) {
     const layout = targetLayout(context.layout, id);
     const receipt = await readCurrentReceipt(context.env.receiptsDir, id);
+    const pins = await readPins(context.env.receiptsDir, id);
     targets.push({
       id,
       root: layout.active,
@@ -72,6 +75,7 @@ export async function status(options: CommandOptions = {}): Promise<StatusResult
       generation: receipt?.generation ?? null,
       paths: receipt?.paths.length ?? 0,
       corpusRoot: path.join(layout.active, 'corpus'),
+      pinned: pins.pins.map((pin) => pin.path),
     });
   }
 
