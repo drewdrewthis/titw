@@ -103,12 +103,17 @@ export function buildProgram(): Command {
     .option('--env <name>', 'environment name', 'default')
     .option('--locked', 'fail instead of writing if titw.lock would change')
     .option('--dry-run', 'stage and validate without activating')
+    .option(
+      '--no-interactive',
+      'skip drift prompts and replace every locally-edited file (default off a TTY)',
+    )
     .option('--json', 'machine-readable output')
-    .action(async (options: GlobalFlags & { locked?: boolean }) => {
+    .action(async (options: GlobalFlags & { locked?: boolean; interactive: boolean }) => {
       const result = await sync({
         ...(options.env === undefined ? {} : { environment: options.env }),
         ...(options.locked === undefined ? {} : { locked: options.locked }),
         ...(options.dryRun === undefined ? {} : { dryRun: options.dryRun }),
+        ...(options.interactive === false ? { interactive: false } : {}),
       });
       emit(options.json, result, () => [
         `${result.dryRun ? 'would sync' : 'synced'} environment "${result.environment}"` +
@@ -118,6 +123,7 @@ export function buildProgram(): Command {
           `  target ${target.id}: ${target.paths} path(s) -> ${target.root}`,
           ...target.warnings.map((warning) => `    warning: ${warning}`),
           ...driftLines(target.drift),
+          ...resolutionLines(target),
         ]),
       ]);
     });
@@ -282,6 +288,23 @@ function driftLines(drift: { missing: string[]; modified: string[]; unowned: str
       ` ${drift.missing.length} missing, ${drift.modified.length} modified,` +
       ` ${drift.unowned.length} unowned`,
   ];
+}
+
+function resolutionLines(target: {
+  kept: string[];
+  proposed: { paths: string[]; file: string } | null;
+}): string[] {
+  const lines: string[] = [];
+  if (target.kept.length > 0) {
+    lines.push(`    kept ${target.kept.length} locally-edited file(s): ${target.kept.join(', ')}`);
+  }
+  if (target.proposed !== null) {
+    lines.push(
+      `    recorded ${target.proposed.paths.length} file(s) for upstream contribution` +
+        ` -> ${target.proposed.file}`,
+    );
+  }
+  return lines;
 }
 
 /** Parse argv and run. Returns the process exit code. */

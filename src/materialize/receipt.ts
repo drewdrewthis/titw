@@ -34,6 +34,17 @@ export const ReceiptSchema = z
 export type Receipt = z.infer<typeof ReceiptSchema>;
 export type ReceiptPackage = z.infer<typeof ReceiptPackageSchema>;
 
+/** Schema of a target's recorded upstream-contribution proposals. */
+export const ProposalsSchema = z
+  .object({
+    schema: z.literal(1),
+    target: z.string().min(1),
+    paths: z.array(z.string().min(1)),
+  })
+  .strict();
+
+export type Proposals = z.infer<typeof ProposalsSchema>;
+
 /** Drift between a receipt and what is actually on disk in the active projection. */
 export interface Drift {
   /** Receipted paths that are gone. */
@@ -148,6 +159,44 @@ export async function readCurrentReceipt(
   const file = currentReceiptFile(receiptsDir, target);
   if (!(await pathExists(file))) return null;
   return loadReceipt(file);
+}
+
+/** File recording paths kept locally and proposed for upstream contribution. */
+export function proposalsFile(receiptsDir: string, target: string): string {
+  return path.join(receiptsDir, target, 'proposals.json');
+}
+
+/** Read a target's recorded proposals, or an empty list when none have been recorded yet. */
+export async function readProposals(receiptsDir: string, target: string): Promise<Proposals> {
+  const file = proposalsFile(receiptsDir, target);
+  if (!(await pathExists(file))) return { schema: 1, target, paths: [] };
+  const raw = await fs.readFile(file, 'utf8');
+  const parsed = ProposalsSchema.safeParse(JSON.parse(raw) as unknown);
+  if (!parsed.success) {
+    throw new TitwError(
+      'E_PROPOSALS_INVALID',
+      `${file}: invalid proposals file`,
+      parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
+    );
+  }
+  return parsed.data;
+}
+
+/**
+ * Merge newly-proposed paths into a target's proposals file and return where
+ * it was written. Paths accumulate (deduplicated, sorted) across sync runs so
+ * an earlier propose is never dropped by a later one.
+ */
+export async function recordProposals(
+  receiptsDir: string,
+  target: string,
+  paths: readonly string[],
+): Promise<string> {
+  const existing = await readProposals(receiptsDir, target);
+  const merged = [...new Set([...existing.paths, ...paths])].sort(comparePaths);
+  const file = proposalsFile(receiptsDir, target);
+  await writeFile(file, `${JSON.stringify({ schema: 1, target, paths: merged }, null, 2)}\n`);
+  return file;
 }
 
 /**

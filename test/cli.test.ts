@@ -79,6 +79,16 @@ describe('titw CLI', () => {
     expect(result.code).toBe(0);
   });
 
+  it('sync --no-interactive is accepted and reports kept/proposed in --json', async () => {
+    const result = await cli(['sync', '--no-interactive', '--json']);
+    expect(result.code).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      targets: Array<{ kept: string[]; proposed: unknown }>;
+    };
+    expect(payload.targets[0]?.kept).toEqual([]);
+    expect(payload.targets[0]?.proposed).toBeNull();
+  });
+
   it('install --frozen --dry-run reports without writing state', async () => {
     const result = await cli(['install', '--frozen', '--dry-run', '--json']);
     expect(result.code).toBe(0);

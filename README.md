@@ -47,6 +47,10 @@ titw rollback             # re-activate the previous projection
 `install`/`sync` take `--dry-run`; every inspection command takes `--json`. All state lives
 under `$TITW_HOME` (default `$XDG_DATA_HOME/titw`, else `~/.local/share/titw`).
 
+When a file `sync` manages was edited locally, `sync` prompts (on a TTY) to replace it, keep
+the edit, or keep it and record it for upstream contribution — `--no-interactive` (or a
+non-TTY `stdin`, e.g. in CI) always replaces without asking, same as before.
+
 ## Pointing the procedures plugin at the corpus
 
 `sync` writes the seven-store corpus to `$TITW_HOME/targets/claude/active/corpus`
