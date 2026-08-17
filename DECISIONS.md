@@ -220,3 +220,21 @@ gets three actions — propose, keep local (sticky, so the same personal diverge
 re-prompt every run), or discard local and take upstream. This makes `propose` the one place
 that answers "how do I differ from upstream, and what do I want to do about it," and it
 happens to self-clear the case where a maintainer edited a contribution during PR review.
+
+## D27 — sync commits dirty files itself, lazily, right before it rebases
+
+Not a user-facing option, and not floating working-tree edits either: sync stages and
+commits whatever's dirty the moment before it starts the rebase. Two things force this.
+D25's resolve-to-local promise only comes cheap if there's a commit for git's merge
+machinery to resolve toward — with floating edits, sync is really stash → fast-forward →
+pop, and a stash pop conflicts in the working tree with markers, which is precisely what D25
+swore off. Hand-rolling that resolution per file instead of trusting git's own strategy is
+the fussiest code path in the tool and the easiest to get quietly wrong. Second, D25 and D26
+both authorize titw to destroy the user's work on their behalf — auto-resolve, discard-local
+— and a tool that does that needs an undo. A floating edit has none; a committed one always
+has the reflog. Diff visibility isn't a factor either way — `git diff <base>` reads
+identically against a dirty tree or a clean HEAD — so it's not part of the case for or
+against. Rejected: exposing the choice to the user. It doubles the rebase path, the part of
+the system with the least room for error, for a knob a non-git corpus user has no footing to
+turn. The experience doesn't change: clone, edit, never touch git. No filewatcher, no
+prompts, no commit message to write — it feels floating and behaves committed.
