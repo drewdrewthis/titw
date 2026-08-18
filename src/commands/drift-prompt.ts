@@ -1,7 +1,7 @@
 import { createInterface } from 'node:readline/promises';
 
 /** A user's resolution for one locally-modified path. */
-export type DriftChoice = 'replace' | 'keep' | 'propose';
+export type DriftChoice = 'replace' | 'keep';
 
 /** Streams `promptDriftChoices` reads from and writes to — a test seam so no test touches the real TTY. */
 export interface DriftPromptIO {
@@ -9,15 +9,14 @@ export interface DriftPromptIO {
   readonly output: NodeJS.WritableStream;
 }
 
-const SINGLE: Record<string, DriftChoice> = { r: 'replace', k: 'keep', p: 'propose' };
-const APPLY_ALL: Record<string, DriftChoice> = { R: 'replace', K: 'keep', P: 'propose' };
+const SINGLE: Record<string, DriftChoice> = { r: 'replace', k: 'keep' };
+const APPLY_ALL: Record<string, DriftChoice> = { R: 'replace', K: 'keep' };
 
 /**
  * Ask, one path at a time, how to resolve each locally-modified path:
- * (r)eplace with the newly-built version, (k)eep the local edit, or (p)ropose
- * it for upstream contribution. An uppercase answer applies that choice to
- * every remaining path without asking again, so a large drift set isn't one
- * keystroke per file.
+ * (r)eplace with the newly-built version, or (k)eep the local edit. An
+ * uppercase answer applies that choice to every remaining path without
+ * asking again, so a large drift set isn't one keystroke per file.
  *
  * Reads lines via the Interface's async iterator rather than `question()`.
  * `question()` resolves from the next 'line' event after it is called; a
@@ -61,8 +60,9 @@ async function askOne(
   rel: string,
 ): Promise<{ value: DriftChoice; applyToAll: boolean } | null> {
   const query =
-    `${rel} was locally edited: (r)eplace with the new version, (k)eep the local edit, ` +
-    `(p)ropose it for upstream (uppercase = apply to all remaining files) > `;
+    `${rel} was locally edited:\n` +
+    `  (r)eplace with the new version, (k)eep the local edit ` +
+    `(uppercase = apply to all remaining files) > `;
   for (;;) {
     output.write(query);
     const next = await lines.next();
@@ -74,6 +74,6 @@ async function askOne(
       const one = SINGLE[answer];
       if (one !== undefined) return { value: one, applyToAll: false };
     }
-    output.write(`unrecognized answer "${answer}" — enter r, k, p (or R, K, P to apply to all).\n`);
+    output.write(`unrecognized answer "${answer}" — enter r, k (or R, K to apply to all).\n`);
   }
 }

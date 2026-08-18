@@ -26,7 +26,6 @@ import {
   detectDrift,
   readCurrentReceipt,
   readPins,
-  recordProposals,
   swapReceipts,
   writePins,
   writeReceipt,
@@ -71,8 +70,8 @@ export interface SyncOptions extends CommandOptions {
   /**
    * Drop every recorded pin for every synced target before resolving drift,
    * so a previously-kept path is no longer protected and this sync's fresh
-   * build is free to reclaim it. The escape hatch out of a `keep`/`propose`
-   * decision (CLI: `--clear-pins`).
+   * build is free to reclaim it. The escape hatch out of a `keep` decision
+   * (CLI: `--clear-pins`).
    */
   readonly clearPins?: boolean | undefined;
 }
@@ -96,8 +95,6 @@ export interface SyncTargetResult {
    * decided (or re-decided) *this* sync — see `resolveModifiedDrift`.
    */
   readonly pinned: string[];
-  /** Where kept paths were recorded for upstream contribution, when any were proposed. */
-  readonly proposed: { readonly paths: string[]; readonly file: string } | null;
 }
 
 export interface SyncResult {
@@ -265,19 +262,11 @@ async function syncTarget(args: {
       drift,
       kept: resolution.kept,
       pinned: resolution.pinned,
-      proposed: null,
     };
   }
 
   await activateGeneration(stageDir, layout, generation);
   const receiptFile = await writeReceipt(context.env.receiptsDir, receipt);
-  const proposed =
-    resolution.proposed.length === 0
-      ? null
-      : {
-          paths: resolution.proposed,
-          file: await recordProposals(context.env.receiptsDir, id, resolution.proposed),
-        };
 
   return {
     id,
@@ -290,7 +279,6 @@ async function syncTarget(args: {
     drift,
     kept: resolution.kept,
     pinned: resolution.pinned,
-    proposed,
   };
 }
 
@@ -299,7 +287,7 @@ async function syncTarget(args: {
  * paths freshly flagged as drift, plus any previously-pinned path whose
  * upstream baseline has moved since the pin was made.
  *
- * Choosing `keep` or `propose` writes a receipt entry for the kept (local)
+ * Choosing `keep` writes a receipt entry for the kept (local)
  * hash, so the very next `detectDrift` no longer sees that path as modified
  * — "no drift" and "no local divergence" become indistinguishable once the
  * receipt matches the active file. Left there, that path would fall back
@@ -342,8 +330,8 @@ async function resolveModifiedDrift(args: {
   stageDir: string;
   receiptsDir: string;
   target: string;
-}): Promise<{ kept: string[]; pinned: string[]; proposed: string[] }> {
-  if (args.dryRun) return { kept: [], pinned: [], proposed: [] };
+}): Promise<{ kept: string[]; pinned: string[] }> {
+  if (args.dryRun) return { kept: [], pinned: [] };
 
   const modified = args.drift?.modified ?? [];
   const modifiedSet = new Set(modified);
@@ -383,7 +371,7 @@ async function resolveModifiedDrift(args: {
   const toResolve = [...modified, ...staleByUpstream];
   if (toResolve.length === 0 || !args.prompt) {
     await persistPins(args, hadPins, nextPins);
-    return { kept: [], pinned, proposed: [] };
+    return { kept: [], pinned };
   }
 
   if (staleByUpstream.length > 0) {
@@ -395,7 +383,6 @@ async function resolveModifiedDrift(args: {
 
   const choices = await promptDriftChoices(toResolve, args.io);
   const kept: string[] = [];
-  const proposed: string[] = [];
 
   for (const rel of toResolve) {
     const choice = choices.get(rel) ?? 'replace';
@@ -406,12 +393,11 @@ async function resolveModifiedDrift(args: {
     const upstreamHash = await hashFile(stageAbs); // read before the copy below overwrites it
     await copyFile(activeAbs, stageAbs);
     kept.push(rel);
-    if (choice === 'propose') proposed.push(rel);
     nextPins.set(rel, { path: rel, hash: await hashFile(activeAbs), upstreamHash });
   }
 
   await persistPins(args, hadPins, nextPins);
-  return { kept, pinned, proposed };
+  return { kept, pinned };
 }
 
 /** Write a target's next pin state, but only touch disk when there is something to record or clear. */
@@ -453,7 +439,6 @@ export async function rollback(
     drift: null,
     kept: [],
     pinned: [],
-    proposed: null,
   };
 }
 

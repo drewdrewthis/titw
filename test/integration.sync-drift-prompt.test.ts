@@ -84,7 +84,7 @@ async function corruptPinUpstreamHash(home: string, rel: string): Promise<void> 
   await fs.writeFile(file, `${JSON.stringify(next, null, 2)}\n`);
 }
 
-describe('sync drift resolution: replace / keep / propose', () => {
+describe('sync drift resolution: replace / keep', () => {
   let root: string;
   let home: string;
   let active: string;
@@ -124,7 +124,6 @@ describe('sync drift resolution: replace / keep / propose', () => {
 
     expect((target?.drift?.modified ?? []).slice().sort()).toEqual([README, SCRIPT].slice().sort());
     expect(target?.kept).toEqual([]);
-    expect(target?.proposed).toBeNull();
     expect(await readActive(active, README)).toBe(originalReadme);
     expect(await readActive(active, SCRIPT)).toBe(originalScript);
   }, 30_000);
@@ -156,7 +155,6 @@ describe('sync drift resolution: replace / keep / propose', () => {
     expect(target?.drift?.modified).toEqual([README]);
     expect(target?.kept).toEqual([README]);
     expect(target?.pinned).toEqual([]);
-    expect(target?.proposed).toBeNull();
     expect(await readActive(active, README)).toBe('LOCAL EDIT — kept\n');
 
     const receipt = JSON.parse(
@@ -180,29 +178,6 @@ describe('sync drift resolution: replace / keep / propose', () => {
     expect(await readActive(active, README)).toBe('LOCAL EDIT — kept\n');
   }, 30_000);
 
-  it('interactive propose: keeps the edit and records it for upstream contribution', async () => {
-    await editActive(active, SCRIPT, '#!/usr/bin/env bash\necho local-edit-propose\n');
-
-    const result = await sync({ home, stdin: ttyStdinAnswers(['p']), stdout: sinkStdout() });
-    const target = result.targets[0];
-
-    expect(target?.drift?.modified).toEqual([SCRIPT]);
-    expect(target?.kept).toEqual([SCRIPT]);
-    expect(await readActive(active, SCRIPT)).toBe('#!/usr/bin/env bash\necho local-edit-propose\n');
-
-    const proposed = target?.proposed;
-    expect(proposed).not.toBeNull();
-    expect(proposed?.paths).toEqual([SCRIPT]);
-    expect(proposed?.file).toMatch(/proposals\.json$/);
-
-    const proposals = JSON.parse(await fs.readFile(proposed!.file, 'utf8')) as {
-      schema: number;
-      target: string;
-      paths: string[];
-    };
-    expect(proposals).toEqual({ schema: 1, target: 'claude', paths: [SCRIPT] });
-  }, 30_000);
-
   it('interactive apply-to-all: one uppercase answer resolves every remaining modified file', async () => {
     await editActive(active, README, 'LOCAL EDIT — bulk readme\n');
     await editActive(active, SCRIPT, '#!/usr/bin/env bash\necho bulk-script\n');
@@ -214,7 +189,6 @@ describe('sync drift resolution: replace / keep / propose', () => {
 
     expect((target?.drift?.modified ?? []).slice().sort()).toEqual([README, SCRIPT].slice().sort());
     expect((target?.kept ?? []).slice().sort()).toEqual([README, SCRIPT].slice().sort());
-    expect(target?.proposed).toBeNull();
     expect(await readActive(active, README)).toBe('LOCAL EDIT — bulk readme\n');
     expect(await readActive(active, SCRIPT)).toBe('#!/usr/bin/env bash\necho bulk-script\n');
   }, 30_000);

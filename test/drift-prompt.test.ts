@@ -21,13 +21,12 @@ function sink(): { stream: NodeJS.WritableStream; written: string[] } {
 describe('promptDriftChoices', () => {
   it('asks once per path and maps each answer to its choice', async () => {
     const { stream: output } = sink();
-    const choices = await promptDriftChoices(['a.md', 'b.md', 'c.md'], {
-      input: input(['r', 'k', 'p']),
+    const choices = await promptDriftChoices(['a.md', 'b.md'], {
+      input: input(['r', 'k']),
       output,
     });
     expect(choices.get('a.md')).toBe('replace');
     expect(choices.get('b.md')).toBe('keep');
-    expect(choices.get('c.md')).toBe('propose');
   });
 
   it('applies an uppercase answer to every remaining path without asking again', async () => {

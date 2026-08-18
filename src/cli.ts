@@ -295,23 +295,13 @@ function driftLines(drift: { missing: string[]; modified: string[]; unowned: str
   ];
 }
 
-function resolutionLines(target: {
-  kept: string[];
-  pinned: string[];
-  proposed: { paths: string[]; file: string } | null;
-}): string[] {
+function resolutionLines(target: { kept: string[]; pinned: string[] }): string[] {
   const lines: string[] = [];
   if (target.kept.length > 0) {
     lines.push(`    kept ${target.kept.length} locally-edited file(s): ${target.kept.join(', ')}`);
   }
   if (target.pinned.length > 0) {
     lines.push(`    honored ${target.pinned.length} pinned file(s): ${target.pinned.join(', ')}`);
-  }
-  if (target.proposed !== null) {
-    lines.push(
-      `    recorded ${target.proposed.paths.length} file(s) for upstream contribution` +
-        ` -> ${target.proposed.file}`,
-    );
   }
   return lines;
 }
