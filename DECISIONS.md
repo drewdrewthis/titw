@@ -184,3 +184,63 @@ rename; one ownership boundary for receipts, drift, uninstall, and gitignore. Co
 plugin's `STORES` list gains one entry (touching `stores.sh`, `lint-frontmatter.sh`
 scope, and the store-list drift test) — a policy call on whether codex lint applies to
 vendored records ships with that change.
+
+## D24 — Retracted: proposing is file-granular, and the diff base is the upstream commit the package was installed from
+
+Void — see D29. `propose` as a third prompt choice is dropped entirely; the sync drift
+prompt is `replace`/`keep` only. The diff-base reasoning this entry established (the
+commit the package was installed from, never upstream tip; files not commits as the unit)
+would still govern if a contribution mechanism is built later, but that mechanism does not
+exist in v1 and is not a sync prompt choice.
+
+## D25 — Sync detects drift via receipt hashes and prompts on the modified bucket
+
+Before rebuilding a projection, sync compares the live tree against the last receipt
+(`detectDrift`): a receipt-owned path that's absent is `missing`, present but hash-mismatched
+is `modified`, present but receipt-unowned is `unowned`. For every file in `modified` — a
+receipt-owned file the user edited since the last sync — sync prompts: `replace` with the
+newly built version, or `keep` the local edit (D29 — `propose` was dropped). A non-TTY
+session or an explicit non-interactive flag skips the prompt and replaces, so scripted and
+CI use never hangs. Built on `node:readline/promises` — no TUI framework, no new dependency.
+
+## D26 — Reconciliation is not a separate surface; it's the same two choices sync offers per file
+
+There's no dedicated command that answers "how do I differ from upstream, and what do I want
+to do about it" — that question is `replace` / `keep`, asked inline by sync (D25) the moment
+it finds a file in the `modified` drift bucket (D29 — no third `propose` choice). Folding
+reconciliation into sync means the decision is made at the moment the conflict is detected,
+against the tree that's actually about to be rebuilt, by the one command a corpus consumer
+already runs — not against a stale snapshot from a separate surface run earlier or later.
+
+## D27 — Retracted: sync commits dirty files itself, lazily, right before it rebases
+
+Void. There is no rebase and no git merge machinery anywhere in titw's source (`grep -rnE
+"rebase|merge|stash|cherry-pick" src/` finds nothing) — sync re-materializes a projection:
+verify the cached tree hash against the lock, recompute selection, build into a staging dir,
+validate, write a content-hashed receipt, activate atomically, rewrite the lock. It never
+fetches, merges, rebases, or diffs a working tree against a remote ref. This entry answered
+a question the architecture doesn't pose: there is no rebase for a lazy commit to prepare a
+tree for, and no stash-pop conflict for a commit to give git something to resolve toward.
+Conflict handling and undo are covered instead by D25 (drift detection plus a per-file
+prompt) and by rollback/generations (a prior generation survives until `gc`) — neither needs
+the corpus tree to be a git repo with commits at all.
+
+## D28 — Sync prompts on drift it would otherwise overwrite, reversing D4's no-prompt stance for that one case
+
+D4 declared the command IS the approval act — no interactive prompt machinery in v1. That
+still holds everywhere except one case: a file sync is about to rebuild that the user edited
+since the last sync (the `modified` drift bucket, D25). Silently replacing it discards the
+edit from view without asking; silently keeping it means the user stops receiving upstream
+updates to that file without being told either. Both are titw choosing for the user, on
+their behalf, invisibly — the one case D4 didn't have in view when it ruled prompting out.
+The prompt (`replace` / `keep`, D25/D26, D29) is v1's one interactive surface, gated
+to exactly that moment, with a non-interactive fallback that replaces so scripted and non-TTY
+use is unaffected by the reversal.
+
+## D29 — Sync drift prompt offers replace/keep only; propose is dropped
+
+`propose` (D24) is retracted, not replaced. The prompt's primary consumer is agents running
+titw non-interactively — they never see the prompt at all (D25's non-TTY fallback replaces),
+so a third choice aimed at a human deciding whether to upstream an edit serves a caller that
+mostly isn't there. A contribution flow, if it's ever needed, is a separate mechanism —
+proposing a file is a git/PR operation, not a sync-time choice — not a branch of this prompt.
