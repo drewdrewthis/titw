@@ -185,22 +185,13 @@ plugin's `STORES` list gains one entry (touching `stores.sh`, `lint-frontmatter.
 scope, and the store-list drift test) — a policy call on whether codex lint applies to
 vendored records ships with that change.
 
-## D24 — Proposing is file-granular, and the diff base is the upstream commit the package was installed from
+## D24 — Retracted: proposing is file-granular, and the diff base is the upstream commit the package was installed from
 
-Proposing a file upstream isn't a separate command — it's one of the three choices
-(`replace` / `keep` / `propose`) sync offers per file when it finds local drift (D25).
-Choosing `propose` keeps the local edit and records that file's path for later upstream
-contribution. The base for what counts as "the user's change" is the commit the package
-was installed from — `titw.lock`'s per-package `commit` (nullable only for `path:` sources)
-— never upstream tip; tip would catch files upstream itself changed and the user never
-touched, which aren't the user's to propose. Files, not commits, are the unit: a local tree
-with forty commits still proposes exactly the files marked, and cherry-picking never enters
-the picture because records already live one-per-file. Turning a marked file into a
-contribution means committing it onto a fresh branch off upstream main, pushing, opening a
-PR, and deleting the branch — plumbing that never becomes durable local topology. Auto-
-opening a PR the instant a file is marked was rejected: most local edits are personal, never
-meant to travel upstream, and immediate auto-PR erases the mine/for-everyone distinction
-while spamming upstream with noise.
+Void — see D29. `propose` as a third prompt choice is dropped entirely; the sync drift
+prompt is `replace`/`keep` only. The diff-base reasoning this entry established (the
+commit the package was installed from, never upstream tip; files not commits as the unit)
+would still govern if a contribution mechanism is built later, but that mechanism does not
+exist in v1 and is not a sync prompt choice.
 
 ## D25 — Sync detects drift via receipt hashes and prompts on the modified bucket
 
@@ -208,20 +199,18 @@ Before rebuilding a projection, sync compares the live tree against the last rec
 (`detectDrift`): a receipt-owned path that's absent is `missing`, present but hash-mismatched
 is `modified`, present but receipt-unowned is `unowned`. For every file in `modified` — a
 receipt-owned file the user edited since the last sync — sync prompts: `replace` with the
-newly built version, `keep` the local edit, or `propose` it (keep it and record the path for
-later upstream contribution, D24). A non-TTY session or an explicit non-interactive flag
-skips the prompt and replaces, so scripted and CI use never hangs. Built on
-`node:readline/promises` — no TUI framework, no new dependency.
+newly built version, or `keep` the local edit (D29 — `propose` was dropped). A non-TTY
+session or an explicit non-interactive flag skips the prompt and replaces, so scripted and
+CI use never hangs. Built on `node:readline/promises` — no TUI framework, no new dependency.
 
-## D26 — Reconciliation is not a separate surface; it's the same three choices sync offers per file
+## D26 — Reconciliation is not a separate surface; it's the same two choices sync offers per file
 
 There's no dedicated command that answers "how do I differ from upstream, and what do I want
-to do about it" — that question is `replace` / `keep` / `propose`, asked inline by sync
-(D25) the moment it finds a file in the `modified` drift bucket. `propose` is one of the
-three answers to that prompt, not a command of its own (D24). Folding reconciliation into
-sync means the decision is made at the moment the conflict is detected, against the tree
-that's actually about to be rebuilt, by the one command a corpus consumer already runs —
-not against a stale snapshot from a separate surface run earlier or later.
+to do about it" — that question is `replace` / `keep`, asked inline by sync (D25) the moment
+it finds a file in the `modified` drift bucket (D29 — no third `propose` choice). Folding
+reconciliation into sync means the decision is made at the moment the conflict is detected,
+against the tree that's actually about to be rebuilt, by the one command a corpus consumer
+already runs — not against a stale snapshot from a separate surface run earlier or later.
 
 ## D27 — Retracted: sync commits dirty files itself, lazily, right before it rebases
 
@@ -244,6 +233,14 @@ since the last sync (the `modified` drift bucket, D25). Silently replacing it di
 edit from view without asking; silently keeping it means the user stops receiving upstream
 updates to that file without being told either. Both are titw choosing for the user, on
 their behalf, invisibly — the one case D4 didn't have in view when it ruled prompting out.
-The prompt (`replace` / `keep` / `propose`, D25/D26) is v1's one interactive surface, gated
+The prompt (`replace` / `keep`, D25/D26, D29) is v1's one interactive surface, gated
 to exactly that moment, with a non-interactive fallback that replaces so scripted and non-TTY
 use is unaffected by the reversal.
+
+## D29 — Sync drift prompt offers replace/keep only; propose is dropped
+
+`propose` (D24) is retracted, not replaced. The prompt's primary consumer is agents running
+titw non-interactively — they never see the prompt at all (D25's non-TTY fallback replaces),
+so a third choice aimed at a human deciding whether to upstream an edit serves a caller that
+mostly isn't there. A contribution flow, if it's ever needed, is a separate mechanism —
+proposing a file is a git/PR operation, not a sync-time choice — not a branch of this prompt.
