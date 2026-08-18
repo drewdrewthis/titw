@@ -182,7 +182,13 @@ export async function readPins(receiptsDir: string, target: string): Promise<Pin
   const file = pinsFile(receiptsDir, target);
   if (!(await pathExists(file))) return { schema: 1, target, pins: [] };
   const raw = await fs.readFile(file, 'utf8');
-  const parsed = PinsSchema.safeParse(JSON.parse(raw) as unknown);
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    throw new TitwError('E_PINS_INVALID', `${file}: invalid JSON: ${(error as Error).message}`);
+  }
+  const parsed = PinsSchema.safeParse(data);
   if (!parsed.success) {
     throw new TitwError(
       'E_PINS_INVALID',

@@ -279,3 +279,52 @@ describe('sync drift resolution: replace / keep', () => {
     expect(result.targets[0]?.pinned).toEqual([PRINCIPLE]);
   }, 30_000);
 });
+
+describe('sync drift resolution: fresh build no longer produces the path', () => {
+  let root: string;
+  let home: string;
+  let repo: FixtureRepo;
+  let active: string;
+
+  beforeAll(async () => {
+    root = await makeTmpDir('drift-prompt-missing-stage');
+    home = path.join(root, 'home');
+    repo = await buildFixtureRepo(path.join(root, 'fixture-way'));
+
+    await install({
+      home,
+      source: repo.source,
+      version: '^1.0.0',
+      include: ['README.md', 'scripts/verify.sh', 'knowledge/principles/simple-first.md'],
+    });
+    const result = await sync({ home });
+    active = result.targets[0]?.root ?? '';
+  }, 60_000);
+
+  afterAll(async () => {
+    await removeTree(root);
+  });
+
+  it('keep on a path this sync no longer builds is skipped, not crashed or pinned', async () => {
+    await editActive(active, PRINCIPLE, 'LOCAL EDIT — orphaned by narrower selection\n');
+
+    // Narrow the selection so this sync's fresh build no longer produces
+    // PRINCIPLE, while the receipt `detectDrift` reads (written before this
+    // install) still claims it — reproducing "drift.modified names a path
+    // the stage doesn't have." Before the guard in resolveModifiedDrift,
+    // answering "keep" here threw ENOENT from hashFile(stageAbs).
+    await install({
+      home,
+      source: repo.source,
+      version: '^1.0.0',
+      include: ['README.md', 'scripts/verify.sh'],
+    });
+
+    const result = await sync({ home, stdin: ttyStdinAnswers(['k']), stdout: sinkStdout() });
+    const target = result.targets[0];
+
+    expect(target?.drift?.modified).toEqual([PRINCIPLE]);
+    expect(target?.kept).toEqual([]);
+    expect(target?.pinned).toEqual([]);
+  }, 30_000);
+});

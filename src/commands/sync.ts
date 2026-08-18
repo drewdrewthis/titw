@@ -390,6 +390,10 @@ async function resolveModifiedDrift(args: {
 
     const activeAbs = path.join(args.activeDir, ...rel.split('/'));
     const stageAbs = path.join(args.stageDir, ...rel.split('/'));
+    // The fresh build may no longer produce this path (e.g. selection
+    // narrowed since the receipt this drift was detected against) — nothing
+    // to replace or pin against, so leave it out of both `kept` and `nextPins`.
+    if (!(await pathExists(stageAbs)) || !(await pathExists(activeAbs))) continue;
     const upstreamHash = await hashFile(stageAbs); // read before the copy below overwrites it
     await copyFile(activeAbs, stageAbs);
     kept.push(rel);
