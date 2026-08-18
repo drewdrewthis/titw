@@ -150,6 +150,74 @@ export async function readCurrentReceipt(
   return loadReceipt(file);
 }
 
+const PinSchema = z
+  .object({
+    path: z.string().min(1),
+    /** Hash of the kept (local) bytes this pin protects. */
+    hash: z.string().min(1),
+    /** Hash of the freshly-built upstream bytes at the time this pin was made. */
+    upstreamHash: z.string().min(1),
+  })
+  .strict();
+
+/** Schema of a target's recorded pins: locally-kept edits protected across syncs. */
+export const PinsSchema = z
+  .object({
+    schema: z.literal(1),
+    target: z.string().min(1),
+    pins: z.array(PinSchema),
+  })
+  .strict();
+
+export type Pin = z.infer<typeof PinSchema>;
+export type Pins = z.infer<typeof PinsSchema>;
+
+/** File recording a target's currently pinned (kept-across-syncs) paths. */
+export function pinsFile(receiptsDir: string, target: string): string {
+  return path.join(receiptsDir, target, 'pins.json');
+}
+
+/** Read a target's recorded pins, or an empty list when none are recorded yet. */
+export async function readPins(receiptsDir: string, target: string): Promise<Pins> {
+  const file = pinsFile(receiptsDir, target);
+  if (!(await pathExists(file))) return { schema: 1, target, pins: [] };
+  const raw = await fs.readFile(file, 'utf8');
+  let data: unknown;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    throw new TitwError('E_PINS_INVALID', `${file}: invalid JSON: ${(error as Error).message}`);
+  }
+  const parsed = PinsSchema.safeParse(data);
+  if (!parsed.success) {
+    throw new TitwError(
+      'E_PINS_INVALID',
+      `${file}: invalid pins file`,
+      parsed.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`),
+    );
+  }
+  return parsed.data;
+}
+
+/**
+ * Overwrite a target's pins file with exactly the given records.
+ *
+ * Pins are the *current* set of kept decisions, not an accumulating log: a
+ * path can be re-pinned with a new hash, or drop out entirely once replaced,
+ * so the caller — which has just resolved every pin for this sync — passes
+ * the full next state rather than a delta to merge.
+ */
+export async function writePins(
+  receiptsDir: string,
+  target: string,
+  pins: readonly Pin[],
+): Promise<string> {
+  const file = pinsFile(receiptsDir, target);
+  const sorted = [...pins].sort((a, b) => comparePaths(a.path, b.path));
+  await writeFile(file, `${JSON.stringify({ schema: 1, target, pins: sorted }, null, 2)}\n`);
+  return file;
+}
+
 /**
  * Compare a projection on disk against its receipt.
  *

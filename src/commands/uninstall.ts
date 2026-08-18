@@ -61,6 +61,10 @@ export async function uninstall(options: UninstallOptions): Promise<UninstallRes
     ...(options.environment === undefined ? {} : { environment: options.environment }),
     ...(options.home === undefined ? {} : { home: options.home }),
     ...(options.processEnv === undefined ? {} : { processEnv: options.processEnv }),
+    // uninstall's reconciliation sync is not the user-facing `titw sync`: it
+    // must keep replacing unconditionally rather than surprising an uninstall
+    // with drift prompts for unrelated locally-edited files.
+    interactive: false,
   });
   return {
     package: options.package,
