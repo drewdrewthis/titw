@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "description": "TITW — a GitHub-backed package manager for agent knowledge and behavior files",
   "license": "MIT",
-  "repository": "github:drewdrewthis/titw",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/drewdrewthis/titw.git"
+  },
   "keywords": [
     "package-manager",
     "agent",
@@ -14,7 +17,7 @@
   ],
   "type": "module",
   "bin": {
-    "titw": "./dist/cli.js"
+    "titw": "dist/cli.js"
   },
   "engines": {
     "node": ">=20"
