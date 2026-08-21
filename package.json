@@ -1,6 +1,6 @@
 {
   "name": "titw",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "TITW — a GitHub-backed package manager for agent knowledge and behavior files",
   "license": "MIT",
   "repository": "github:drewdrewthis/titw",
