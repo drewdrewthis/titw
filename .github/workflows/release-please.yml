@@ -16,8 +16,6 @@ jobs:
     steps:
       - uses: googleapis/release-please-action@v4
         id: release
-        with:
-          release-type: node
 
   # No publish job: publishing is manual until `titw` exists on the npm
   # registry and an npm Trusted Publisher (OIDC) is registered for this repo.
