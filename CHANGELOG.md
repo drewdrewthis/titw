@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.0](https://github.com/drewdrewthis/titw/compare/v0.1.0...v0.2.0) (2026-08-22)
+
+
+### Features
+
+* interactive drift resolution — sync prompts replace/keep and pins kept files ([#12](https://github.com/drewdrewthis/titw/issues/12)) ([414ab3c](https://github.com/drewdrewthis/titw/commit/414ab3c74d3567dc8b16a2c62555b5aeeb9d8448))
+
+
+### Bug Fixes
+
+* move bootstrap-sha back to the 1.0.0 release commit ([646ebc8](https://github.com/drewdrewthis/titw/commit/646ebc88587f269b1dc7c752efbeec13b24a6612))
+* normalize repository and bin fields for npm publish ([d9eb584](https://github.com/drewdrewthis/titw/commit/d9eb584ae3a61dc2fc95516441015d76605b1404))
+* pin titw to 0.1.0 and configure release-please for pre-1.0 ([5c02477](https://github.com/drewdrewthis/titw/commit/5c02477e334c53a0bff35cd88e68a17bad9a0057))
+* pin version to 0.1.0 and configure release-please for pre-1.0 semver ([1c5345b](https://github.com/drewdrewthis/titw/commit/1c5345b0478874cb5fd825cd6ec4b82d6278735b))
+* resolve argv[1] through symlinks so the installed bin runs ([#9](https://github.com/drewdrewthis/titw/issues/9)) ([d25807d](https://github.com/drewdrewthis/titw/commit/d25807d319b6ab444b1ac6645d37370d19c5bf17))
+* scope the npm package name to @drewdrewthis/titw ([1646746](https://github.com/drewdrewthis/titw/commit/1646746bb7c34329742fdd8696cc0c23dd50a47f))
+* scope the npm package name to @drewdrewthis/titw ([13fff23](https://github.com/drewdrewthis/titw/commit/13fff233b3abc99dfe529c9f5077ba25af17892f))
+
 ## 0.1.0 (2026-08-10)
 
 
