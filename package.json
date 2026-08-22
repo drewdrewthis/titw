@@ -1,5 +1,5 @@
 {
-  "name": "titw",
+  "name": "@drewdrewthis/titw",
   "version": "0.1.0",
   "description": "TITW — a GitHub-backed package manager for agent knowledge and behavior files",
   "license": "MIT",
@@ -21,6 +21,9 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "files": [
     "dist"

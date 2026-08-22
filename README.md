@@ -27,9 +27,13 @@ active components (skills/hooks) are not implemented yet.
 ## Install
 
 ```bash
-npx -y titw --help        # no install needed
-npm install -g titw       # or install the CLI globally
+npx -y @drewdrewthis/titw --help   # no install needed
+npm install -g @drewdrewthis/titw  # or install the CLI globally
 ```
+
+The npm package is scoped (`@drewdrewthis/titw` — the registry rejected the
+unscoped `titw` as too similar to existing packages); the installed command is
+still `titw`.
 
 ## Working today
 
